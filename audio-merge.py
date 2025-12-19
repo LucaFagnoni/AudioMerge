@@ -5,14 +5,13 @@ import subprocess
 import tempfile
 import shutil
 import wave
-import struct
 import numpy as np
 
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QLabel, QPushButton, QCheckBox, 
                              QScrollArea, QFileDialog, QMessageBox, QFrame, QSizePolicy)
-from PyQt6.QtCore import Qt, QUrl, pyqtSignal, QThread
-from PyQt6.QtGui import QDragEnterEvent, QDropEvent, QPainter, QColor, QPen
+from PyQt6.QtCore import Qt, QUrl, pyqtSignal, QThread, QSize
+from PyQt6.QtGui import QDragEnterEvent, QDropEvent, QPainter, QColor, QPen, QIcon
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
 
 # --- Thread per estrarre audio ---
@@ -54,7 +53,6 @@ class WaveformWidget(QWidget):
 
     def load_audio_data(self, file_path):
         if not os.path.exists(file_path): return
-        
         try:
             with wave.open(file_path, 'r') as wf:
                 self.n_frames = wf.getnframes()
@@ -85,8 +83,6 @@ class WaveformWidget(QWidget):
         painter.fillRect(self.rect(), QColor("#1e1e1e"))
         
         if not self.is_loaded or self.samples is None:
-            painter.setPen(QColor("#777"))
-            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "Loading Waveform...")
             return
 
         rect_w = self.width()
@@ -189,6 +185,98 @@ class AudioTrackWidget(QFrame):
     def seek_audio(self, ms):
         self.player.setPosition(ms)
 
+# --- NUOVO: Widget Drop Area con Bottone Sovrapposto ---
+class DropSection(QWidget):
+    file_dropped = pyqtSignal(str)
+    close_clicked = pyqtSignal()
+
+    def __init__(self):
+        super().__init__()
+        self.setAcceptDrops(True)
+        # Layout principale che contiene solo la Label
+        self.layout = QVBoxLayout(self)
+        self.layout.setContentsMargins(0, 0, 0, 0)
+        
+        # 1. La Label di sfondo
+        self.label = QLabel("\nDrag & Drop video here\n")
+        self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.reset_style()
+        self.layout.addWidget(self.label)
+        
+        # 2. Il bottone "X" (Non aggiunto al layout, ma figlio di self)
+        self.close_btn = QPushButton("✖", self)
+        self.close_btn.setFixedSize(30, 30)
+        self.close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.close_btn.clicked.connect(self.close_clicked)
+        self.close_btn.hide() # Nascosto all'inizio
+        
+        # Stile del bottone rotondo
+        self.close_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #ff3b30;
+                color: white;
+                border-radius: 15px; /* Metà della dimensione (30px) per farlo rotondo */
+                font-weight: bold;
+                font-size: 14px;
+                border: 2px solid #2b2b2b;
+            }
+            QPushButton:hover {
+                background-color: #d32f2f;
+            }
+        """)
+
+    def set_text(self, text):
+        self.label.setText(text)
+
+    def set_active_style(self):
+        self.label.setStyleSheet("""
+            QLabel {
+                border: 2px solid #00bcd4;
+                border-radius: 15px;
+                background-color: #1e3a1f;
+                color: #ffffff;
+                font-size: 20px;
+                font-weight: bold;
+                padding: 30px;
+            }
+        """)
+
+    def reset_style(self):
+        self.label.setStyleSheet("""
+            QLabel {
+                border: 2px dashed #00bcd4;
+                border-radius: 15px;
+                background-color: #333333;
+                color: #ffffff;
+                font-size: 24px;
+                font-weight: bold;
+                padding: 30px;
+            }
+        """)
+
+    def resizeEvent(self, event):
+        # Questo evento viene chiamato ogni volta che la finestra cambia dimensione.
+        # Calcoliamo la posizione per ancorare il bottone in basso a destra.
+        
+        # Margini per posizionarlo "a cavallo" del bordo o appena dentro
+        margin_right = 0
+        margin_bottom = 0
+        
+        x = self.width() - self.close_btn.width() - margin_right
+        y = self.height() - self.close_btn.height() - margin_bottom
+        
+        self.close_btn.move(x, y)
+        super().resizeEvent(event)
+
+    def dragEnterEvent(self, event: QDragEnterEvent):
+        if event.mimeData().hasUrls(): event.accept()
+        else: event.ignore()
+
+    def dropEvent(self, event: QDropEvent):
+        files = [u.toLocalFile() for u in event.mimeData().urls()]
+        if files: self.file_dropped.emit(files[0])
+
+
 # --- Finestra Principale ---
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -211,45 +299,14 @@ class MainWindow(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
+        layout.setContentsMargins(20, 20, 20, 20)
         
-        # Drop Label
-        self.drop_label = QLabel("Drag & Drop video here")
-        self.drop_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.drop_label.setStyleSheet("""
-            QLabel {
-                border: 3px dashed #00bcd4;
-                border-radius: 15px;
-                background-color: #333333;
-                color: #ffffff;
-                font-size: 24px;
-                font-weight: bold;
-                padding: 30px;
-            }
-        """)
-        layout.addWidget(self.drop_label)
+        # --- DROP SECTION (CUSTOM WIDGET) ---
+        self.drop_section = DropSection()
+        self.drop_section.file_dropped.connect(self.load_video)
+        self.drop_section.close_clicked.connect(self.close_clip)
+        layout.addWidget(self.drop_section)
         
-        # --- TOOLBAR (NUOVA) ---
-        toolbar_layout = QHBoxLayout()
-        toolbar_layout.addStretch()
-        
-        self.close_btn = QPushButton("Close clip")
-        self.close_btn.setFixedSize(150, 40)
-        self.close_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #d32f2f;
-                color: white;
-                font-weight: bold;
-                border-radius: 5px;
-            }
-            QPushButton:hover { background-color: #b71c1c; }
-            QPushButton:disabled { background-color: #444; color: #777; }
-        """)
-        self.close_btn.clicked.connect(self.close_clip)
-        self.close_btn.setEnabled(False)
-        toolbar_layout.addWidget(self.close_btn)
-        
-        layout.addLayout(toolbar_layout)
-
         # Scroll Area
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
@@ -261,32 +318,32 @@ class MainWindow(QMainWindow):
         self.scroll.setWidget(self.scroll_content)
         layout.addWidget(self.scroll)
         
-        # Export Zone
-        export_layout = QHBoxLayout()
-        export_layout.setContentsMargins(10, 10, 10, 10)
-        
-        self.auto_save_chk = QCheckBox("Save at origin path")
-        self.auto_save_chk.setToolTip("Automatically save the file in the same folder adding '_mix' suffix.")
-        export_layout.addWidget(self.auto_save_chk)
-        
-        export_layout.addStretch()
+        # --- ZONA ESPORTAZIONE ---
+        export_layout = QVBoxLayout()
+        export_layout.setContentsMargins(10, 10, 10, 0)
         
         self.export_btn = QPushButton("Export")
-        self.export_btn.setFixedSize(250, 50)
+        self.export_btn.setFixedHeight(50) 
         self.export_btn.setStyleSheet("""
             QPushButton {
-                background-color: #0078d7;
-                color: white;
+                background-color: #555;
+                color: #aaa;
                 font-size: 16px;
                 font-weight: bold;
-                border-radius: 5px;
+                border-radius: 8px;
             }
-            QPushButton:hover { background-color: #008ae6; }
-            QPushButton:disabled { background-color: #555; color: #888; }
+            QPushButton:enabled {
+                background-color: #0078d7;
+                color: white;
+            }
+            QPushButton:hover:enabled { background-color: #008ae6; }
         """)
         self.export_btn.clicked.connect(self.export_video)
         self.export_btn.setEnabled(False)
         export_layout.addWidget(self.export_btn)
+        
+        self.auto_save_chk = QCheckBox("Same path as origin")
+        export_layout.addWidget(self.auto_save_chk, alignment=Qt.AlignmentFlag.AlignCenter)
         
         layout.addLayout(export_layout)
         
@@ -299,6 +356,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Error", "FFmpeg not found! Install and add to PATH environment variable.")
             sys.exit(1)
 
+    # Gestiamo il drop anche sulla Main Window per sicurezza
     def dragEnterEvent(self, event: QDragEnterEvent):
         if event.mimeData().hasUrls(): event.accept()
         else: event.ignore()
@@ -309,51 +367,30 @@ class MainWindow(QMainWindow):
 
     def close_clip(self):
         """Chiude il video corrente e resetta l'interfaccia"""
-        # 1. Ferma tutti i player e pulisci i widget
         for w in self.track_widgets:
             w.player.stop()
             w.deleteLater()
         self.track_widgets = []
         
-        # 2. Resetta variabile path
         self.current_video_path = None
         
-        # 3. Resetta UI
-        self.drop_label.setText("Drag & Drop video here")
-        self.drop_label.setStyleSheet("""
-            QLabel {
-                border: 3px dashed #00bcd4;
-                border-radius: 15px;
-                background-color: #333333;
-                color: #ffffff;
-                font-size: 24px;
-                font-weight: bold;
-                padding: 30px;
-            }
-        """)
+        # Reset UI DropSection
+        self.drop_section.set_text("\nDrag & Drop video here\n")
+        self.drop_section.reset_style()
+        self.drop_section.close_btn.hide() # Nascondi la X rossa
         
-        # 4. Disabilita pulsanti
         self.export_btn.setEnabled(False)
-        self.close_btn.setEnabled(False)
 
     def load_video(self, path):
-        # Prima chiudiamo eventuale video aperto
         self.close_clip()
 
         self.current_video_path = path
         filename = os.path.basename(path)
-        self.drop_label.setText(f"Loaded:\n{filename}")
-        self.drop_label.setStyleSheet("""
-            QLabel {
-                border: 3px solid #4CAF50;
-                border-radius: 15px;
-                background-color: #1e3a1f;
-                color: #ffffff;
-                font-size: 20px;
-                font-weight: bold;
-                padding: 20px;
-            }
-        """)
+        
+        # Aggiorna UI DropSection
+        self.drop_section.set_text(f"Loaded:\n{filename}")
+        self.drop_section.set_active_style()
+        self.drop_section.close_btn.show() # Mostra la X rossa
         
         try:
             cmd = ['ffprobe', '-v', 'quiet', '-print_format', 'json', '-show_streams', '-select_streams', 'a', path]
@@ -371,7 +408,6 @@ class MainWindow(QMainWindow):
                 self.track_widgets.append(w)
             
             self.export_btn.setEnabled(True)
-            self.close_btn.setEnabled(True) # Abilita il pulsante di chiusura
             
         except Exception as e:
             QMessageBox.critical(self, "Error", str(e))
@@ -395,8 +431,7 @@ class MainWindow(QMainWindow):
             new_filename = f"{name_no_ext}_mix{ext}"
             out_path = os.path.join(src_dir, new_filename)
         else:
-            default_save_name = os.path.join(src_dir, f"{name_no_ext}_mix{ext}")
-            out_path, _ = QFileDialog.getSaveFileName(self, "Save video", src_dir, "Video Files (*.mp4 *.mkv *.mov)")
+            out_path, _ = QFileDialog.getSaveFileName(self, "Save Video", src_dir, "Video Files (*.mp4 *.mkv *.mov)")
 
         if not out_path: return
 
@@ -407,15 +442,15 @@ class MainWindow(QMainWindow):
         
         cmd.extend(['-filter_complex', filter_str, '-map', '[aout]', '-c:a', 'aac', '-b:a', '192k', out_path])
         
-        self.drop_label.setText("Exporting...")
+        self.drop_section.set_text("Esportazione in corso...")
         QApplication.processEvents()
         
         try:
             subprocess.run(cmd, check=True)
             QMessageBox.information(self, "Done", f"Video succesfully exported:\n{out_path}")
-            self.drop_label.setText("Esport completed!")
+            self.drop_section.set_text(f"Export completed!\n{os.path.basename(out_path)}")
         except subprocess.CalledProcessError:
-            QMessageBox.critical(self, "Error", "FFmpeg Error during export.")
+            QMessageBox.critical(self, "Error", "FFmpeg error while exporting.")
 
     def closeEvent(self, event):
         shutil.rmtree(self.temp_dir, ignore_errors=True)
