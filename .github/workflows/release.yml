@@ -1,37 +1,32 @@
 name: Create Release Executable
 
-# Si attiva SOLO quando spingi un tag che inizia con 'v' (es. v1.0, v2.0.1)
 on:
   push:
     tags:
       - 'v*'
 
 permissions:
-  contents: write  # Fondamentale per permettere all'action di creare la Release
+  contents: write
 
 jobs:
   build-and-release:
     runs-on: windows-latest
 
     steps:
-    # 1. Scarica il codice
     - name: Checkout code
       uses: actions/checkout@v4
 
-    # 2. Setup Python
+    # RIMOSTA la riga "cache: pip" per evitare l'errore se manca requirements.txt
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.10'
-        cache: 'pip'
 
-    # 3. Dipendenze
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install PyQt6 numpy pyinstaller
 
-    # 4. Scarica e Configura FFmpeg (Automatico)
     - name: Download and Setup FFmpeg
       run: |
         echo "Downloading FFmpeg..."
@@ -41,7 +36,6 @@ jobs:
         Expand-Archive -Path "ffmpeg.zip" -DestinationPath ".\ffmpeg_temp"
         
         echo "Moving binaries..."
-        # Sposta i file exe dalla cartella estratta alla root del progetto
         Move-Item -Path ".\ffmpeg_temp\ffmpeg-*-essentials_build\bin\ffmpeg.exe" -Destination ".\ffmpeg.exe"
         Move-Item -Path ".\ffmpeg_temp\ffmpeg-*-essentials_build\bin\ffprobe.exe" -Destination ".\ffprobe.exe"
         
@@ -49,12 +43,11 @@ jobs:
         Remove-Item "ffmpeg.zip"
         Remove-Item "ffmpeg_temp" -Recurse -Force
 
-    # 5. Compila l'EXE
     - name: Build with PyInstaller
       run: |
+        # Assicurati che il tuo script si chiami 'mixer.py' nel repository
         python -m PyInstaller --noconsole --onefile --name "AudioMerger" --add-binary "ffmpeg.exe;." --add-binary "ffprobe.exe;." mixer.py
 
-    # 6. CREA LA RELEASE E CARICA IL FILE
     - name: Create Release
       uses: softprops/action-gh-release@v2
       if: startsWith(github.ref, 'refs/tags/')
