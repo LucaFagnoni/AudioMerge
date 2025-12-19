@@ -26,7 +26,6 @@ class AudioExtractorThread(QThread):
         self.output_path = output_path
 
     def run(self):
-        # Estrae i primi 30 secondi per l'anteprima
         cmd = [
             'ffmpeg', '-y', '-i', self.input_video,
             '-map', f'0:a:{self.track_index}',
@@ -67,7 +66,7 @@ class WaveformWidget(QWidget):
                 self.is_loaded = True
                 self.update()
         except Exception as e:
-            print(f"Errore lettura waveform: {e}")
+            print(f"Error reading waveform: {e}")
 
     def set_position(self, ms):
         self.current_position_ms = ms
@@ -87,7 +86,7 @@ class WaveformWidget(QWidget):
         
         if not self.is_loaded or self.samples is None:
             painter.setPen(QColor("#777"))
-            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "Caricamento Waveform...")
+            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "Loading Waveform...")
             return
 
         rect_w = self.width()
@@ -144,7 +143,7 @@ class AudioTrackWidget(QFrame):
         lang = track_info.get('tags', {}).get('language', 'unk')
         codec = track_info.get('codec_name', 'unknown')
         title = track_info.get('tags', {}).get('title', f"Track {index}")
-        label_text = f"<b>Traccia {index}</b> ({codec}) - {lang.upper()}<br>{title}"
+        label_text = f"<b>Track {index}</b> ({codec}) - {lang.upper()}<br>{title}"
         self.label = QLabel(label_text)
         self.label.setStyleSheet("font-size: 14px;")
         top_row.addWidget(self.label)
@@ -194,8 +193,8 @@ class AudioTrackWidget(QFrame):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Video Audio Mixer Pro")
-        self.resize(800, 700)
+        self.setWindowTitle("Audio Merge")
+        self.resize(800, 750)
         self.setAcceptDrops(True)
         
         self.current_video_path = None
@@ -214,7 +213,7 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(central)
         
         # Drop Label
-        self.drop_label = QLabel("\n⬇ TRASCINA IL TUO VIDEO QUI ⬇\n")
+        self.drop_label = QLabel("Drag & Drop video here")
         self.drop_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.drop_label.setStyleSheet("""
             QLabel {
@@ -229,6 +228,28 @@ class MainWindow(QMainWindow):
         """)
         layout.addWidget(self.drop_label)
         
+        # --- TOOLBAR (NUOVA) ---
+        toolbar_layout = QHBoxLayout()
+        toolbar_layout.addStretch()
+        
+        self.close_btn = QPushButton("Close clip")
+        self.close_btn.setFixedSize(150, 40)
+        self.close_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #d32f2f;
+                color: white;
+                font-weight: bold;
+                border-radius: 5px;
+            }
+            QPushButton:hover { background-color: #b71c1c; }
+            QPushButton:disabled { background-color: #444; color: #777; }
+        """)
+        self.close_btn.clicked.connect(self.close_clip)
+        self.close_btn.setEnabled(False)
+        toolbar_layout.addWidget(self.close_btn)
+        
+        layout.addLayout(toolbar_layout)
+
         # Scroll Area
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
@@ -240,20 +261,17 @@ class MainWindow(QMainWindow):
         self.scroll.setWidget(self.scroll_content)
         layout.addWidget(self.scroll)
         
-        # --- ZONA ESPORTAZIONE (NUOVA) ---
+        # Export Zone
         export_layout = QHBoxLayout()
         export_layout.setContentsMargins(10, 10, 10, 10)
         
-        # 1. Checkbox Auto-Save
-        self.auto_save_chk = QCheckBox("Salva nella cartella origine (suffisso: _mix)")
-        self.auto_save_chk.setToolTip("Se attivo, salva automaticamente il file nella stessa cartella del video originale aggiungendo '_mix' al nome.")
+        self.auto_save_chk = QCheckBox("Save at origin path")
+        self.auto_save_chk.setToolTip("Automatically save the file in the same folder adding '_mix' suffix.")
         export_layout.addWidget(self.auto_save_chk)
         
-        # Spacer per spingere il bottone a destra
         export_layout.addStretch()
         
-        # 2. Bottone Export
-        self.export_btn = QPushButton("Esporta Mix Normalizzato")
+        self.export_btn = QPushButton("Export")
         self.export_btn.setFixedSize(250, 50)
         self.export_btn.setStyleSheet("""
             QPushButton {
@@ -278,7 +296,7 @@ class MainWindow(QMainWindow):
         try:
             subprocess.run(['ffmpeg', '-version'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except FileNotFoundError:
-            QMessageBox.critical(self, "Errore", "FFmpeg non trovato! Installalo e aggiungilo al PATH.")
+            QMessageBox.critical(self, "Error", "FFmpeg not found! Install and add to PATH environment variable.")
             sys.exit(1)
 
     def dragEnterEvent(self, event: QDragEnterEvent):
@@ -289,10 +307,42 @@ class MainWindow(QMainWindow):
         files = [u.toLocalFile() for u in event.mimeData().urls()]
         if files: self.load_video(files[0])
 
+    def close_clip(self):
+        """Chiude il video corrente e resetta l'interfaccia"""
+        # 1. Ferma tutti i player e pulisci i widget
+        for w in self.track_widgets:
+            w.player.stop()
+            w.deleteLater()
+        self.track_widgets = []
+        
+        # 2. Resetta variabile path
+        self.current_video_path = None
+        
+        # 3. Resetta UI
+        self.drop_label.setText("Drag & Drop video here")
+        self.drop_label.setStyleSheet("""
+            QLabel {
+                border: 3px dashed #00bcd4;
+                border-radius: 15px;
+                background-color: #333333;
+                color: #ffffff;
+                font-size: 24px;
+                font-weight: bold;
+                padding: 30px;
+            }
+        """)
+        
+        # 4. Disabilita pulsanti
+        self.export_btn.setEnabled(False)
+        self.close_btn.setEnabled(False)
+
     def load_video(self, path):
+        # Prima chiudiamo eventuale video aperto
+        self.close_clip()
+
         self.current_video_path = path
         filename = os.path.basename(path)
-        self.drop_label.setText(f"File caricato:\n{filename}")
+        self.drop_label.setText(f"Loaded:\n{filename}")
         self.drop_label.setStyleSheet("""
             QLabel {
                 border: 3px solid #4CAF50;
@@ -305,18 +355,14 @@ class MainWindow(QMainWindow):
             }
         """)
         
-        for w in self.track_widgets: 
-            w.player.stop()
-            w.deleteLater()
-        self.track_widgets = []
-        
         try:
             cmd = ['ffprobe', '-v', 'quiet', '-print_format', 'json', '-show_streams', '-select_streams', 'a', path]
             data = json.loads(subprocess.check_output(cmd))
             streams = data.get('streams', [])
             
             if not streams:
-                QMessageBox.warning(self, "Info", "Nessuna traccia audio trovata.")
+                QMessageBox.warning(self, "Info", "No audio tracks found.")
+                self.close_clip() # Resetta se non ci sono tracce
                 return
 
             for idx, stream in enumerate(streams):
@@ -325,43 +371,35 @@ class MainWindow(QMainWindow):
                 self.track_widgets.append(w)
             
             self.export_btn.setEnabled(True)
+            self.close_btn.setEnabled(True) # Abilita il pulsante di chiusura
             
         except Exception as e:
-            QMessageBox.critical(self, "Errore", str(e))
+            QMessageBox.critical(self, "Error", str(e))
+            self.close_clip()
 
     def export_video(self):
         if not self.current_video_path: return
         
         selected = [w.index for w in self.track_widgets if w.checkbox.isChecked()]
         if not selected:
-            QMessageBox.warning(self, "No Audio", "Seleziona almeno una traccia.")
+            QMessageBox.warning(self, "No Audio", "Select at least one track.")
             return
             
-        # Ferma i player
         for w in self.track_widgets: w.player.stop()
 
-        # --- LOGICA DESTINAZIONE FILE ---
         src_dir = os.path.dirname(self.current_video_path)
         src_filename = os.path.basename(self.current_video_path)
         name_no_ext, ext = os.path.splitext(src_filename)
 
         if self.auto_save_chk.isChecked():
-            # Opzione A: Salvataggio automatico nella cartella di origine
             new_filename = f"{name_no_ext}_mix{ext}"
             out_path = os.path.join(src_dir, new_filename)
         else:
-            # Opzione B: Dialog manuale, ma parte dalla cartella di origine
             default_save_name = os.path.join(src_dir, f"{name_no_ext}_mix{ext}")
-            out_path, _ = QFileDialog.getSaveFileName(
-                self, 
-                "Salva Video", 
-                src_dir,  # <-- Qui imposto la cartella di partenza
-                "Video Files (*.mp4 *.mkv *.mov)"
-            )
+            out_path, _ = QFileDialog.getSaveFileName(self, "Save video", src_dir, "Video Files (*.mp4 *.mkv *.mov)")
 
         if not out_path: return
 
-        # Costruzione comando FFmpeg
         cmd = ['ffmpeg', '-y', '-i', self.current_video_path, '-map', '0:v', '-c:v', 'copy']
         
         filter_str = "".join([f"[0:a:{i}]" for i in selected])
@@ -369,15 +407,15 @@ class MainWindow(QMainWindow):
         
         cmd.extend(['-filter_complex', filter_str, '-map', '[aout]', '-c:a', 'aac', '-b:a', '192k', out_path])
         
-        self.drop_label.setText("Esportazione in corso...")
+        self.drop_label.setText("Exporting...")
         QApplication.processEvents()
         
         try:
             subprocess.run(cmd, check=True)
-            QMessageBox.information(self, "Fatto", f"Video esportato con successo:\n{out_path}")
-            self.drop_label.setText("Esportazione completata!")
+            QMessageBox.information(self, "Done", f"Video succesfully exported:\n{out_path}")
+            self.drop_label.setText("Esport completed!")
         except subprocess.CalledProcessError:
-            QMessageBox.critical(self, "Errore", "Errore FFmpeg durante l'esportazione.")
+            QMessageBox.critical(self, "Error", "FFmpeg Error during export.")
 
     def closeEvent(self, event):
         shutil.rmtree(self.temp_dir, ignore_errors=True)
