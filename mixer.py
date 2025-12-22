@@ -123,12 +123,12 @@ class ExportThread(QThread):
             
             if self.process.returncode == 0:
                 self.progress_update.emit(100)
-                self.finished.emit(True, "Esportazione completata!")
+                self.finished.emit(True, "Export completed!")
             else:
-                self.finished.emit(False, "Errore durante l'esportazione.")
+                self.finished.emit(False, "Error during export.")
 
         except Exception as e:
-            self.finished.emit(False, f"Errore eccezione: {str(e)}")
+            self.finished.emit(False, f"Error exception: {str(e)}")
 
     def stop(self):
         self.is_running = False
@@ -320,7 +320,7 @@ class AudioTrackWidget(QFrame):
         lang = track_info.get('tags', {}).get('language', 'unk')
         codec = track_info.get('codec_name', 'unknown')
         title = track_info.get('tags', {}).get('title', f"Track {index}")
-        top_row.addWidget(QLabel(f"<b>Traccia {index}</b> ({codec}) - {lang.upper()}<br>{title}"))
+        top_row.addWidget(QLabel(f"<b>Track {index}</b> ({codec}) - {lang.upper()}<br>{title}"))
         main_layout.addLayout(top_row)
         
         self.waveform = WaveformWidget()
@@ -376,7 +376,7 @@ class DropSection(QWidget):
         self.layout.addWidget(self.label)
         
         self.overlay = QLabel(self)
-        self.overlay.setText("✖\nCLICCA PER CHIUDERE")
+        self.overlay.setText("✖ CLOSE")
         self.overlay.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.overlay.hide()
         self.overlay.setStyleSheet("background-color: rgba(0,0,0,180); color: #ff5555; font-size: 24px; font-weight: bold; border-radius: 15px;")
@@ -385,7 +385,7 @@ class DropSection(QWidget):
     def set_loaded_state(self, loaded, filename=""):
         self.clip_loaded = loaded
         if loaded:
-            self.label.setText(f"File caricato:\n{filename}")
+            self.label.setText(f"Loaded:\n{filename}")
             self.label.setStyleSheet("border: 3px solid #4CAF50; border-radius: 15px; background-color: #1e3a1f; color: #fff; font-size: 20px; font-weight: bold; padding: 30px;")
         else:
             self.label.setText("\nDrag & Drop video here\n")
@@ -415,7 +415,7 @@ class DropSection(QWidget):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Video Audio Mixer Pro")
+        self.setWindowTitle("Audio Merge")
         self.resize(800, 750)
         self.setAcceptDrops(True)
         self.current_video_path = None
@@ -449,12 +449,12 @@ class MainWindow(QMainWindow):
         export_layout = QVBoxLayout()
         export_layout.setContentsMargins(10, 10, 10, 0)
         
-        self.export_btn = ProgressButton("ESPORTA MIX NORMALIZZATO")
+        self.export_btn = ProgressButton("EXPORT")
         self.export_btn.clicked.connect(self.start_export)
         self.export_btn.setEnabled(False)
         export_layout.addWidget(self.export_btn)
         
-        self.auto_save_chk = QCheckBox("Salva nella cartella origine (suffisso: _mix)")
+        self.auto_save_chk = QCheckBox("Export in origin folder (suffix: _mix)")
         export_layout.addWidget(self.auto_save_chk, alignment=Qt.AlignmentFlag.AlignCenter)
         
         layout.addLayout(export_layout)
@@ -472,7 +472,7 @@ class MainWindow(QMainWindow):
             try:
                 subprocess.run(['ffmpeg', '-version'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, startupinfo=si)
             except FileNotFoundError:
-                QMessageBox.critical(self, "Errore", f"FFmpeg non trovato!\nAssicurati che 'ffmpeg.exe' sia nella stessa cartella dello script o installato nel sistema.")
+                QMessageBox.critical(self, "Error", f"FFmpeg not found!\nMake sure that 'ffmpeg.exe' is in the same folder as this executable or installed in your system.")
                 sys.exit(1)
 
     def close_clip(self):
@@ -510,7 +510,7 @@ class MainWindow(QMainWindow):
 
             streams = data.get('streams', [])
             if not streams:
-                QMessageBox.warning(self, "Info", "Nessuna traccia audio trovata.")
+                QMessageBox.warning(self, "Info", "No audio tracks found.")
                 self.close_clip()
                 return
             for idx, stream in enumerate(streams):
@@ -519,14 +519,14 @@ class MainWindow(QMainWindow):
                 self.track_widgets.append(w)
             self.export_btn.setEnabled(True)
         except Exception as e:
-            QMessageBox.critical(self, "Errore", str(e))
+            QMessageBox.critical(self, "Error", str(e))
             self.close_clip()
 
     def start_export(self):
         if not self.current_video_path: return
         selected = [w.index for w in self.track_widgets if w.checkbox.isChecked()]
         if not selected:
-            QMessageBox.warning(self, "No Audio", "Seleziona almeno una traccia.")
+            QMessageBox.warning(self, "No Audio", "Select at least one track.")
             return
         
         for w in self.track_widgets: w.player.stop()
@@ -538,7 +538,7 @@ class MainWindow(QMainWindow):
         if self.auto_save_chk.isChecked():
             out_path = os.path.join(src_dir, f"{name_no_ext}_mix{ext}")
         else:
-            out_path, _ = QFileDialog.getSaveFileName(self, "Salva Video", src_dir, "Video Files (*.mp4 *.mkv *.mov)")
+            out_path, _ = QFileDialog.getSaveFileName(self, "Save Video", src_dir, "Video Files (*.mp4 *.mkv *.mov)")
         if not out_path: return
 
         cmd = [FFMPEG_BIN, '-y', '-i', self.current_video_path, '-map', '0:v', '-c:v', 'copy']
@@ -558,8 +558,8 @@ class MainWindow(QMainWindow):
 
     def on_export_finished(self, success, message):
         self.export_btn.reset_mode()
-        if success: QMessageBox.information(self, "Successo", message)
-        else: QMessageBox.critical(self, "Errore", message)
+        if success: QMessageBox.information(self, "Success", message)
+        else: QMessageBox.critical(self, "Error", message)
 
     def closeEvent(self, event):
         if self.export_thread and self.export_thread.isRunning():
