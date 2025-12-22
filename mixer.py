@@ -5,7 +5,8 @@ import subprocess
 import tempfile
 import shutil
 import wave
-import numpy as np
+import struct
+import math
 
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QLabel, QPushButton, QCheckBox, 
@@ -14,9 +15,18 @@ from PyQt6.QtCore import Qt, QUrl, pyqtSignal, QThread, QSize
 from PyQt6.QtGui import QDragEnterEvent, QDropEvent, QPainter, QColor, QPen, QIcon
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
 
-# --- Thread per estrarre audio ---
+# --- RISORSE ESTERNE ---
+def get_resource_path(relative_path):
+    if hasattr(sys, '_MEIPASS'):
+        return os.path.join(sys._MEIPASS, relative_path)
+    return os.path.join(os.path.abspath("."), relative_path)
+
+FFMPEG_BIN = get_resource_path("ffmpeg.exe")
+FFPROBE_BIN = get_resource_path("ffprobe.exe")
+
+# --- THREAD ESTRAZIONE ---
 class AudioExtractorThread(QThread):
-    finished_extraction = pyqtSignal(str, str) # file_path, index
+    finished_extraction = pyqtSignal(str, str)
 
     def __init__(self, input_video, track_index, output_path):
         super().__init__()
@@ -25,8 +35,11 @@ class AudioExtractorThread(QThread):
         self.output_path = output_path
 
     def run(self):
+        si = subprocess.STARTUPINFO()
+        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        
         cmd = [
-            'ffmpeg', '-y', '-i', self.input_video,
+            FFMPEG_BIN, '-y', '-i', self.input_video,
             '-map', f'0:a:{self.track_index}',
             '-t', '30', 
             '-ac', '1', 
@@ -34,10 +47,10 @@ class AudioExtractorThread(QThread):
             '-f', 'wav', 
             self.output_path
         ]
-        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, startupinfo=si)
         self.finished_extraction.emit(self.output_path, str(self.track_index))
 
-# --- Widget Waveform ---
+# --- WIDGET WAVEFORM OTTIMIZZATO (NO NUMPY) ---
 class WaveformWidget(QWidget):
     seek_requested = pyqtSignal(int)
 
@@ -45,7 +58,7 @@ class WaveformWidget(QWidget):
         super().__init__()
         self.setFixedHeight(60)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.samples = None
+        self.samples = [] # Lista standard python invece di array numpy
         self.duration_ms = 0
         self.current_position_ms = 0
         self.is_loaded = False
@@ -58,13 +71,42 @@ class WaveformWidget(QWidget):
                 self.n_frames = wf.getnframes()
                 self.framerate = wf.getframerate()
                 self.duration_ms = (self.n_frames / self.framerate) * 1000
+                
+                # Leggiamo i dati. Per velocizzare e risparmiare RAM, 
+                # non leggiamo ogni singolo campione se il file è grande,
+                # ma facciamo un downsample immediato durante la lettura se necessario.
+                # Per 30 secondi @ 44.1khz sono ~1.3M campioni, gestibili in lista.
+                
                 raw_data = wf.readframes(self.n_frames)
-                y = np.frombuffer(raw_data, dtype=np.int16)
-                self.samples = y / 32768.0 
+                
+                # Unpack veloce usando struct
+                # 'h' significa short (2 bytes), int16
+                # Calcoliamo quanti campioni ci sono
+                count = len(raw_data) // 2
+                fmt = f"<{count}h" 
+                
+                # Convertiamo in tupla di interi
+                raw_samples = struct.unpack(fmt, raw_data)
+                
+                # Normalizziamo e downsampliamo per la GUI (teniamo max 2000 punti per il disegno)
+                # Questo riduce drasticamente l'uso di memoria rispetto a tenere tutto
+                target_width = 2000 
+                step = max(1, count // target_width)
+                
+                self.samples = []
+                for i in range(0, count, step):
+                    # Prendiamo un campione rappresentativo (semplificato)
+                    # o calcoliamo il max del blocco locale
+                    chunk = raw_samples[i:i+step]
+                    if chunk:
+                        # Valore assoluto massimo normalizzato a 0-1
+                        val = max(abs(x) for x in chunk) / 32768.0
+                        self.samples.append(val)
+                
                 self.is_loaded = True
                 self.update()
         except Exception as e:
-            print(f"Error reading waveform: {e}")
+            print(f"Errore lettura waveform: {e}")
 
     def set_position(self, ms):
         self.current_position_ms = ms
@@ -82,7 +124,7 @@ class WaveformWidget(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.fillRect(self.rect(), QColor("#1e1e1e"))
         
-        if not self.is_loaded or self.samples is None:
+        if not self.is_loaded or not self.samples:
             return
 
         rect_w = self.width()
@@ -91,15 +133,16 @@ class WaveformWidget(QWidget):
         
         total_samples = len(self.samples)
         if total_samples > 0:
-            step = max(1, total_samples // rect_w)
+            # Qui ridisegniamo basandoci sulla larghezza corrente della finestra
+            step_draw = total_samples / rect_w
+            
             painter.setPen(QPen(QColor("#00bcd4"), 1))
             
             for x in range(rect_w):
-                idx = x * step
+                idx = int(x * step_draw)
                 if idx >= total_samples: break
-                chunk = self.samples[idx : idx + step]
-                if len(chunk) == 0: continue
-                val = np.max(np.abs(chunk))
+                
+                val = self.samples[idx]
                 bar_h = val * (rect_h - 4)
                 y1 = mid_h - (bar_h / 2)
                 y2 = mid_h + (bar_h / 2)
@@ -110,7 +153,7 @@ class WaveformWidget(QWidget):
             painter.setPen(QPen(QColor("#ff4081"), 2))
             painter.drawLine(int(cursor_x), 0, int(cursor_x), rect_h)
 
-# --- Widget Traccia Audio ---
+# --- TRACK WIDGET ---
 class AudioTrackWidget(QFrame):
     def __init__(self, track_info, index, file_path, temp_dir):
         super().__init__()
@@ -139,7 +182,7 @@ class AudioTrackWidget(QFrame):
         lang = track_info.get('tags', {}).get('language', 'unk')
         codec = track_info.get('codec_name', 'unknown')
         title = track_info.get('tags', {}).get('title', f"Track {index}")
-        label_text = f"<b>Track {index}</b> ({codec}) - {lang.upper()}<br>{title}"
+        label_text = f"<b>Traccia {index}</b> ({codec}) - {lang.upper()}<br>{title}"
         self.label = QLabel(label_text)
         self.label.setStyleSheet("font-size: 14px;")
         top_row.addWidget(self.label)
@@ -185,7 +228,7 @@ class AudioTrackWidget(QFrame):
     def seek_audio(self, ms):
         self.player.setPosition(ms)
 
-# --- NUOVO: Widget Drop Area con Bottone Sovrapposto ---
+# --- DROP SECTION ---
 class DropSection(QWidget):
     file_dropped = pyqtSignal(str)
     close_clicked = pyqtSignal()
@@ -193,36 +236,30 @@ class DropSection(QWidget):
     def __init__(self):
         super().__init__()
         self.setAcceptDrops(True)
-        # Layout principale che contiene solo la Label
         self.layout = QVBoxLayout(self)
         self.layout.setContentsMargins(0, 0, 0, 0)
         
-        # 1. La Label di sfondo
         self.label = QLabel("\nDrag & Drop video here\n")
         self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.reset_style()
         self.layout.addWidget(self.label)
         
-        # 2. Il bottone "X" (Non aggiunto al layout, ma figlio di self)
         self.close_btn = QPushButton("✖", self)
         self.close_btn.setFixedSize(30, 30)
         self.close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.close_btn.clicked.connect(self.close_clicked)
-        self.close_btn.hide() # Nascosto all'inizio
+        self.close_btn.hide()
         
-        # Stile del bottone rotondo
         self.close_btn.setStyleSheet("""
             QPushButton {
                 background-color: #ff3b30;
                 color: white;
-                border-radius: 15px; /* Metà della dimensione (30px) per farlo rotondo */
+                border-radius: 15px;
                 font-weight: bold;
                 font-size: 14px;
                 border: 2px solid #2b2b2b;
             }
-            QPushButton:hover {
-                background-color: #d32f2f;
-            }
+            QPushButton:hover { background-color: #d32f2f; }
         """)
 
     def set_text(self, text):
@@ -255,16 +292,10 @@ class DropSection(QWidget):
         """)
 
     def resizeEvent(self, event):
-        # Questo evento viene chiamato ogni volta che la finestra cambia dimensione.
-        # Calcoliamo la posizione per ancorare il bottone in basso a destra.
-        
-        # Margini per posizionarlo "a cavallo" del bordo o appena dentro
-        margin_right = 0
-        margin_bottom = 0
-        
+        margin_right = 15
+        margin_bottom = 15
         x = self.width() - self.close_btn.width() - margin_right
         y = self.height() - self.close_btn.height() - margin_bottom
-        
         self.close_btn.move(x, y)
         super().resizeEvent(event)
 
@@ -276,12 +307,11 @@ class DropSection(QWidget):
         files = [u.toLocalFile() for u in event.mimeData().urls()]
         if files: self.file_dropped.emit(files[0])
 
-
-# --- Finestra Principale ---
+# --- MAIN WINDOW ---
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Audio Merge")
+        self.setWindowTitle("Video Audio Mixer Pro")
         self.resize(800, 750)
         self.setAcceptDrops(True)
         
@@ -301,13 +331,11 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(central)
         layout.setContentsMargins(20, 20, 20, 20)
         
-        # --- DROP SECTION (CUSTOM WIDGET) ---
         self.drop_section = DropSection()
         self.drop_section.file_dropped.connect(self.load_video)
         self.drop_section.close_clicked.connect(self.close_clip)
         layout.addWidget(self.drop_section)
         
-        # Scroll Area
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setStyleSheet("background-color: transparent;")
@@ -318,11 +346,10 @@ class MainWindow(QMainWindow):
         self.scroll.setWidget(self.scroll_content)
         layout.addWidget(self.scroll)
         
-        # --- ZONA ESPORTAZIONE ---
         export_layout = QVBoxLayout()
         export_layout.setContentsMargins(10, 10, 10, 0)
         
-        self.export_btn = QPushButton("Export")
+        self.export_btn = QPushButton("ESPORTA MIX NORMALIZZATO")
         self.export_btn.setFixedHeight(50) 
         self.export_btn.setStyleSheet("""
             QPushButton {
@@ -332,17 +359,14 @@ class MainWindow(QMainWindow):
                 font-weight: bold;
                 border-radius: 8px;
             }
-            QPushButton:enabled {
-                background-color: #0078d7;
-                color: white;
-            }
+            QPushButton:enabled { background-color: #0078d7; color: white; }
             QPushButton:hover:enabled { background-color: #008ae6; }
         """)
         self.export_btn.clicked.connect(self.export_video)
         self.export_btn.setEnabled(False)
         export_layout.addWidget(self.export_btn)
         
-        self.auto_save_chk = QCheckBox("Same path as origin")
+        self.auto_save_chk = QCheckBox("Salva nella cartella origine (suffisso: _mix)")
         export_layout.addWidget(self.auto_save_chk, alignment=Qt.AlignmentFlag.AlignCenter)
         
         layout.addLayout(export_layout)
@@ -350,13 +374,14 @@ class MainWindow(QMainWindow):
         self.check_ffmpeg()
 
     def check_ffmpeg(self):
+        si = subprocess.STARTUPINFO()
+        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
         try:
-            subprocess.run(['ffmpeg', '-version'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run([FFMPEG_BIN, '-version'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, startupinfo=si)
         except FileNotFoundError:
-            QMessageBox.critical(self, "Error", "FFmpeg not found! Install and add to PATH environment variable.")
+            QMessageBox.critical(self, "Errore", f"FFmpeg non trovato in:\n{FFMPEG_BIN}")
             sys.exit(1)
 
-    # Gestiamo il drop anche sulla Main Window per sicurezza
     def dragEnterEvent(self, event: QDragEnterEvent):
         if event.mimeData().hasUrls(): event.accept()
         else: event.ignore()
@@ -366,91 +391,77 @@ class MainWindow(QMainWindow):
         if files: self.load_video(files[0])
 
     def close_clip(self):
-        """Chiude il video corrente e resetta l'interfaccia"""
         for w in self.track_widgets:
             w.player.stop()
             w.deleteLater()
         self.track_widgets = []
-        
         self.current_video_path = None
-        
-        # Reset UI DropSection
         self.drop_section.set_text("\nDrag & Drop video here\n")
         self.drop_section.reset_style()
-        self.drop_section.close_btn.hide() # Nascondi la X rossa
-        
+        self.drop_section.close_btn.hide()
         self.export_btn.setEnabled(False)
 
     def load_video(self, path):
         self.close_clip()
-
         self.current_video_path = path
         filename = os.path.basename(path)
-        
-        # Aggiorna UI DropSection
-        self.drop_section.set_text(f"Loaded:\n{filename}")
+        self.drop_section.set_text(f"File caricato:\n{filename}")
         self.drop_section.set_active_style()
-        self.drop_section.close_btn.show() # Mostra la X rossa
+        self.drop_section.close_btn.show()
         
+        si = subprocess.STARTUPINFO()
+        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
         try:
-            cmd = ['ffprobe', '-v', 'quiet', '-print_format', 'json', '-show_streams', '-select_streams', 'a', path]
-            data = json.loads(subprocess.check_output(cmd))
+            cmd = [FFPROBE_BIN, '-v', 'quiet', '-print_format', 'json', '-show_streams', '-select_streams', 'a', path]
+            data = json.loads(subprocess.check_output(cmd, startupinfo=si))
             streams = data.get('streams', [])
-            
             if not streams:
-                QMessageBox.warning(self, "Info", "No audio tracks found.")
-                self.close_clip() # Resetta se non ci sono tracce
+                QMessageBox.warning(self, "Info", "Nessuna traccia audio trovata.")
+                self.close_clip()
                 return
-
             for idx, stream in enumerate(streams):
                 w = AudioTrackWidget(stream, idx, path, self.temp_dir)
                 self.tracks_layout.addWidget(w)
                 self.track_widgets.append(w)
-            
             self.export_btn.setEnabled(True)
-            
         except Exception as e:
-            QMessageBox.critical(self, "Error", str(e))
+            QMessageBox.critical(self, "Errore", str(e))
             self.close_clip()
 
     def export_video(self):
         if not self.current_video_path: return
-        
         selected = [w.index for w in self.track_widgets if w.checkbox.isChecked()]
         if not selected:
-            QMessageBox.warning(self, "No Audio", "Select at least one track.")
+            QMessageBox.warning(self, "No Audio", "Seleziona almeno una traccia.")
             return
-            
         for w in self.track_widgets: w.player.stop()
-
+        
         src_dir = os.path.dirname(self.current_video_path)
         src_filename = os.path.basename(self.current_video_path)
         name_no_ext, ext = os.path.splitext(src_filename)
-
+        
         if self.auto_save_chk.isChecked():
-            new_filename = f"{name_no_ext}_mix{ext}"
-            out_path = os.path.join(src_dir, new_filename)
+            out_path = os.path.join(src_dir, f"{name_no_ext}_mix{ext}")
         else:
-            out_path, _ = QFileDialog.getSaveFileName(self, "Save Video", src_dir, "Video Files (*.mp4 *.mkv *.mov)")
-
+            out_path, _ = QFileDialog.getSaveFileName(self, "Salva Video", src_dir, "Video Files (*.mp4 *.mkv *.mov)")
         if not out_path: return
 
-        cmd = ['ffmpeg', '-y', '-i', self.current_video_path, '-map', '0:v', '-c:v', 'copy']
-        
+        cmd = [FFMPEG_BIN, '-y', '-i', self.current_video_path, '-map', '0:v', '-c:v', 'copy']
         filter_str = "".join([f"[0:a:{i}]" for i in selected])
         filter_str += f"amix=inputs={len(selected)}[mixed];[mixed]dynaudnorm[aout]"
-        
         cmd.extend(['-filter_complex', filter_str, '-map', '[aout]', '-c:a', 'aac', '-b:a', '192k', out_path])
         
         self.drop_section.set_text("Esportazione in corso...")
         QApplication.processEvents()
         
+        si = subprocess.STARTUPINFO()
+        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
         try:
-            subprocess.run(cmd, check=True)
-            QMessageBox.information(self, "Done", f"Video succesfully exported:\n{out_path}")
-            self.drop_section.set_text(f"Export completed!\n{os.path.basename(out_path)}")
+            subprocess.run(cmd, check=True, startupinfo=si)
+            QMessageBox.information(self, "Fatto", f"Video esportato:\n{out_path}")
+            self.drop_section.set_text(f"Esportazione completata!\n{os.path.basename(out_path)}")
         except subprocess.CalledProcessError:
-            QMessageBox.critical(self, "Error", "FFmpeg error while exporting.")
+            QMessageBox.critical(self, "Errore", "Errore durante l'esportazione.")
 
     def closeEvent(self, event):
         shutil.rmtree(self.temp_dir, ignore_errors=True)
