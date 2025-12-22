@@ -95,12 +95,20 @@ class WaveformWidget(QWidget):
         self.current_position_ms = ms
         self.update()
 
-    def mousePressEvent(self, event):
+    def _handle_input(self, x):
         if not self.is_loaded or self.duration_ms == 0: return
-        x = event.pos().x()
+        x = max(0, min(x, self.width()))
         pct = x / self.width()
         ms = int(self.duration_ms * pct)
         self.seek_requested.emit(ms)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._handle_input(event.pos().x())
+
+    def mouseMoveEvent(self, event):
+        if event.buttons() & Qt.MouseButton.LeftButton:
+            self._handle_input(event.pos().x())
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -207,6 +215,22 @@ class AudioTrackWidget(QFrame):
     def seek_audio(self, ms):
         self.player.setPosition(ms)
 
+    # --- NUOVO: METODO DI PULIZIA CRUCIALE PER EVITARE CRASH/FREEZE ---
+    def cleanup(self):
+        """Ferma il player e rilascia le risorse prima della distruzione"""
+        try:
+            # 1. Ferma la riproduzione
+            self.player.stop()
+            # 2. Sgancia il file sorgente (IMPORTANTE: Rilascia il lock sul file)
+            self.player.setSource(QUrl())
+            # 3. Disconnetti eventuali segnali del thread se è ancora vivo
+            try:
+                self.extractor.finished_extraction.disconnect()
+            except:
+                pass
+        except Exception as e:
+            print(f"Cleanup error: {e}")
+
 # --- DROP SECTION CON OVERLAY ---
 class DropSection(QWidget):
     file_dropped = pyqtSignal(str)
@@ -217,24 +241,19 @@ class DropSection(QWidget):
         self.setAcceptDrops(True)
         self.clip_loaded = False
         
-        # Layout base
         self.layout = QVBoxLayout(self)
         self.layout.setContentsMargins(0, 0, 0, 0)
         
-        # Label Informativa
         self.label = QLabel("\nDrag & Drop video here\n")
         self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.reset_style()
         self.layout.addWidget(self.label)
         
-        # OVERLAY (Nascosto di default)
-        # Lo creiamo come figlio di self, così possiamo posizionarlo sopra la label
         self.overlay = QLabel(self)
         self.overlay.setText("✖\nCLICCA PER CHIUDERE")
         self.overlay.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.overlay.hide()
         
-        # Stile Overlay: Sfondo nero semitrasparente, testo bianco grande
         self.overlay.setStyleSheet("""
             background-color: rgba(0, 0, 0, 180); 
             color: #ff5555; 
@@ -243,9 +262,6 @@ class DropSection(QWidget):
             border-radius: 15px;
         """)
         
-        # Questo permette all'overlay di ignorare gli eventi mouse se necessario,
-        # ma qui vogliamo che prenda il click, quindi NON mettiamo TransparentForMouseEvents
-        # Tuttavia, gestiremo il click nel mousePressEvent del genitore per semplicità.
         self.overlay.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
 
     def set_loaded_state(self, loaded, filename=""):
@@ -266,7 +282,7 @@ class DropSection(QWidget):
         else:
             self.label.setText("\nDrag & Drop video here\n")
             self.reset_style()
-            self.overlay.hide() # Assicuriamoci che l'overlay sparisca
+            self.overlay.hide()
 
     def reset_style(self):
         self.label.setStyleSheet("""
@@ -282,26 +298,22 @@ class DropSection(QWidget):
         """)
 
     def resizeEvent(self, event):
-        # L'overlay deve coprire esattamente tutto il widget
         self.overlay.resize(self.size())
         super().resizeEvent(event)
 
     def enterEvent(self, event):
-        # Quando il mouse entra, se c'è una clip, mostra l'overlay
         if self.clip_loaded:
             self.overlay.show()
             self.setCursor(Qt.CursorShape.PointingHandCursor)
         super().enterEvent(event)
 
     def leaveEvent(self, event):
-        # Quando il mouse esce, nascondi l'overlay
         if self.clip_loaded:
             self.overlay.hide()
             self.setCursor(Qt.CursorShape.ArrowCursor)
         super().leaveEvent(event)
 
     def mousePressEvent(self, event):
-        # Se si clicca e c'è una clip caricata, chiudi
         if self.clip_loaded and event.button() == Qt.MouseButton.LeftButton:
             self.close_clicked.emit()
         super().mousePressEvent(event)
@@ -338,13 +350,11 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(central)
         layout.setContentsMargins(20, 20, 20, 20)
         
-        # Drop Section
         self.drop_section = DropSection()
         self.drop_section.file_dropped.connect(self.load_video)
         self.drop_section.close_clicked.connect(self.close_clip)
         layout.addWidget(self.drop_section)
         
-        # Scroll Area
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setStyleSheet("background-color: transparent;")
@@ -355,7 +365,6 @@ class MainWindow(QMainWindow):
         self.scroll.setWidget(self.scroll_content)
         layout.addWidget(self.scroll)
         
-        # Export
         export_layout = QVBoxLayout()
         export_layout.setContentsMargins(10, 10, 10, 0)
         
@@ -401,23 +410,24 @@ class MainWindow(QMainWindow):
         if files: self.load_video(files[0])
 
     def close_clip(self):
+        # --- FIX: Usa il metodo cleanup() per rilasciare i player in modo sicuro ---
         for w in self.track_widgets:
-            w.player.stop()
+            w.cleanup() 
             w.deleteLater()
+        
+        # Forza l'elaborazione degli eventi per assicurarsi che i player siano distrutti
+        # prima di procedere. Questo previene molti crash e freeze.
+        QApplication.processEvents()
+
         self.track_widgets = []
         self.current_video_path = None
-        
-        # Reset UI tramite il metodo della DropSection
         self.drop_section.set_loaded_state(False)
         self.export_btn.setEnabled(False)
 
     def load_video(self, path):
-        self.close_clip() # Resetta prima
-        
+        self.close_clip()
         self.current_video_path = path
         filename = os.path.basename(path)
-        
-        # Imposta stato UI
         self.drop_section.set_loaded_state(True, filename)
         
         si = subprocess.STARTUPINFO()
@@ -445,8 +455,11 @@ class MainWindow(QMainWindow):
         if not selected:
             QMessageBox.warning(self, "No Audio", "Seleziona almeno una traccia.")
             return
-        for w in self.track_widgets: w.player.stop()
         
+        # Ferma i player anche qui per sicurezza
+        for w in self.track_widgets: 
+            w.player.stop()
+
         src_dir = os.path.dirname(self.current_video_path)
         src_filename = os.path.basename(self.current_video_path)
         name_no_ext, ext = os.path.splitext(src_filename)
@@ -462,10 +475,6 @@ class MainWindow(QMainWindow):
         filter_str += f"amix=inputs={len(selected)}[mixed];[mixed]dynaudnorm[aout]"
         cmd.extend(['-filter_complex', filter_str, '-map', '[aout]', '-c:a', 'aac', '-b:a', '192k', out_path])
         
-        # Qui usiamo la label della drop section per mostrare status (temporaneamente, anche se è "occupata" dal nome file)
-        # Ma poiché l'export è bloccante (subprocess.run) o quasi, va bene.
-        # Oppure possiamo aggiungere una label di status dedicata.
-        # Per ora usiamo un cursore di attesa.
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         QApplication.processEvents()
         
