@@ -11,8 +11,8 @@ import math
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QLabel, QPushButton, QCheckBox, 
                              QScrollArea, QFileDialog, QMessageBox, QFrame, QSizePolicy)
-from PyQt6.QtCore import Qt, QUrl, pyqtSignal, QThread, QSize
-from PyQt6.QtGui import QDragEnterEvent, QDropEvent, QPainter, QColor, QPen, QIcon
+from PyQt6.QtCore import Qt, QUrl, pyqtSignal, QThread, QSize, QEvent
+from PyQt6.QtGui import QDragEnterEvent, QDropEvent, QPainter, QColor, QPen, QIcon, QCursor
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
 
 # --- RISORSE ESTERNE ---
@@ -50,7 +50,7 @@ class AudioExtractorThread(QThread):
         subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, startupinfo=si)
         self.finished_extraction.emit(self.output_path, str(self.track_index))
 
-# --- WIDGET WAVEFORM OTTIMIZZATO (NO NUMPY) ---
+# --- WIDGET WAVEFORM ---
 class WaveformWidget(QWidget):
     seek_requested = pyqtSignal(int)
 
@@ -58,7 +58,7 @@ class WaveformWidget(QWidget):
         super().__init__()
         self.setFixedHeight(60)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.samples = [] # Lista standard python invece di array numpy
+        self.samples = []
         self.duration_ms = 0
         self.current_position_ms = 0
         self.is_loaded = False
@@ -71,35 +71,18 @@ class WaveformWidget(QWidget):
                 self.n_frames = wf.getnframes()
                 self.framerate = wf.getframerate()
                 self.duration_ms = (self.n_frames / self.framerate) * 1000
-                
-                # Leggiamo i dati. Per velocizzare e risparmiare RAM, 
-                # non leggiamo ogni singolo campione se il file è grande,
-                # ma facciamo un downsample immediato durante la lettura se necessario.
-                # Per 30 secondi @ 44.1khz sono ~1.3M campioni, gestibili in lista.
-                
                 raw_data = wf.readframes(self.n_frames)
-                
-                # Unpack veloce usando struct
-                # 'h' significa short (2 bytes), int16
-                # Calcoliamo quanti campioni ci sono
                 count = len(raw_data) // 2
                 fmt = f"<{count}h" 
-                
-                # Convertiamo in tupla di interi
                 raw_samples = struct.unpack(fmt, raw_data)
                 
-                # Normalizziamo e downsampliamo per la GUI (teniamo max 2000 punti per il disegno)
-                # Questo riduce drasticamente l'uso di memoria rispetto a tenere tutto
                 target_width = 2000 
                 step = max(1, count // target_width)
                 
                 self.samples = []
                 for i in range(0, count, step):
-                    # Prendiamo un campione rappresentativo (semplificato)
-                    # o calcoliamo il max del blocco locale
                     chunk = raw_samples[i:i+step]
                     if chunk:
-                        # Valore assoluto massimo normalizzato a 0-1
                         val = max(abs(x) for x in chunk) / 32768.0
                         self.samples.append(val)
                 
@@ -133,15 +116,11 @@ class WaveformWidget(QWidget):
         
         total_samples = len(self.samples)
         if total_samples > 0:
-            # Qui ridisegniamo basandoci sulla larghezza corrente della finestra
             step_draw = total_samples / rect_w
-            
             painter.setPen(QPen(QColor("#00bcd4"), 1))
-            
             for x in range(rect_w):
                 idx = int(x * step_draw)
                 if idx >= total_samples: break
-                
                 val = self.samples[idx]
                 bar_h = val * (rect_h - 4)
                 y1 = mid_h - (bar_h / 2)
@@ -228,7 +207,7 @@ class AudioTrackWidget(QFrame):
     def seek_audio(self, ms):
         self.player.setPosition(ms)
 
-# --- DROP SECTION ---
+# --- DROP SECTION CON OVERLAY ---
 class DropSection(QWidget):
     file_dropped = pyqtSignal(str)
     close_clicked = pyqtSignal()
@@ -236,52 +215,63 @@ class DropSection(QWidget):
     def __init__(self):
         super().__init__()
         self.setAcceptDrops(True)
+        self.clip_loaded = False
+        
+        # Layout base
         self.layout = QVBoxLayout(self)
         self.layout.setContentsMargins(0, 0, 0, 0)
         
+        # Label Informativa
         self.label = QLabel("\nDrag & Drop video here\n")
         self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.reset_style()
         self.layout.addWidget(self.label)
         
-        self.close_btn = QPushButton("✖", self)
-        self.close_btn.setFixedSize(30, 30)
-        self.close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.close_btn.clicked.connect(self.close_clicked)
-        self.close_btn.hide()
+        # OVERLAY (Nascosto di default)
+        # Lo creiamo come figlio di self, così possiamo posizionarlo sopra la label
+        self.overlay = QLabel(self)
+        self.overlay.setText("✖\nCLICCA PER CHIUDERE")
+        self.overlay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.overlay.hide()
         
-        self.close_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #ff3b30;
-                color: white;
-                border-radius: 15px;
-                font-weight: bold;
-                font-size: 14px;
-                border: 2px solid #2b2b2b;
-            }
-            QPushButton:hover { background-color: #d32f2f; }
+        # Stile Overlay: Sfondo nero semitrasparente, testo bianco grande
+        self.overlay.setStyleSheet("""
+            background-color: rgba(0, 0, 0, 180); 
+            color: #ff5555; 
+            font-size: 24px; 
+            font-weight: bold;
+            border-radius: 15px;
         """)
+        
+        # Questo permette all'overlay di ignorare gli eventi mouse se necessario,
+        # ma qui vogliamo che prenda il click, quindi NON mettiamo TransparentForMouseEvents
+        # Tuttavia, gestiremo il click nel mousePressEvent del genitore per semplicità.
+        self.overlay.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
 
-    def set_text(self, text):
-        self.label.setText(text)
-
-    def set_active_style(self):
-        self.label.setStyleSheet("""
-            QLabel {
-                border: 2px solid #00bcd4;
-                border-radius: 15px;
-                background-color: #1e3a1f;
-                color: #ffffff;
-                font-size: 20px;
-                font-weight: bold;
-                padding: 30px;
-            }
-        """)
+    def set_loaded_state(self, loaded, filename=""):
+        self.clip_loaded = loaded
+        if loaded:
+            self.label.setText(f"File caricato:\n{filename}")
+            self.label.setStyleSheet("""
+                QLabel {
+                    border: 3px solid #4CAF50;
+                    border-radius: 15px;
+                    background-color: #1e3a1f;
+                    color: #ffffff;
+                    font-size: 20px;
+                    font-weight: bold;
+                    padding: 30px;
+                }
+            """)
+        else:
+            self.label.setText("\nDrag & Drop video here\n")
+            self.reset_style()
+            self.overlay.hide() # Assicuriamoci che l'overlay sparisca
 
     def reset_style(self):
         self.label.setStyleSheet("""
             QLabel {
-                border: 2px dashed #00bcd4;
+                border: 3px dashed #00bcd4;
                 border-radius: 15px;
                 background-color: #333333;
                 color: #ffffff;
@@ -292,12 +282,29 @@ class DropSection(QWidget):
         """)
 
     def resizeEvent(self, event):
-        margin_right = 15
-        margin_bottom = 15
-        x = self.width() - self.close_btn.width() - margin_right
-        y = self.height() - self.close_btn.height() - margin_bottom
-        self.close_btn.move(x, y)
+        # L'overlay deve coprire esattamente tutto il widget
+        self.overlay.resize(self.size())
         super().resizeEvent(event)
+
+    def enterEvent(self, event):
+        # Quando il mouse entra, se c'è una clip, mostra l'overlay
+        if self.clip_loaded:
+            self.overlay.show()
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        # Quando il mouse esce, nascondi l'overlay
+        if self.clip_loaded:
+            self.overlay.hide()
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event):
+        # Se si clicca e c'è una clip caricata, chiudi
+        if self.clip_loaded and event.button() == Qt.MouseButton.LeftButton:
+            self.close_clicked.emit()
+        super().mousePressEvent(event)
 
     def dragEnterEvent(self, event: QDragEnterEvent):
         if event.mimeData().hasUrls(): event.accept()
@@ -331,11 +338,13 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(central)
         layout.setContentsMargins(20, 20, 20, 20)
         
+        # Drop Section
         self.drop_section = DropSection()
         self.drop_section.file_dropped.connect(self.load_video)
         self.drop_section.close_clicked.connect(self.close_clip)
         layout.addWidget(self.drop_section)
         
+        # Scroll Area
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setStyleSheet("background-color: transparent;")
@@ -346,6 +355,7 @@ class MainWindow(QMainWindow):
         self.scroll.setWidget(self.scroll_content)
         layout.addWidget(self.scroll)
         
+        # Export
         export_layout = QVBoxLayout()
         export_layout.setContentsMargins(10, 10, 10, 0)
         
@@ -396,18 +406,19 @@ class MainWindow(QMainWindow):
             w.deleteLater()
         self.track_widgets = []
         self.current_video_path = None
-        self.drop_section.set_text("\nDrag & Drop video here\n")
-        self.drop_section.reset_style()
-        self.drop_section.close_btn.hide()
+        
+        # Reset UI tramite il metodo della DropSection
+        self.drop_section.set_loaded_state(False)
         self.export_btn.setEnabled(False)
 
     def load_video(self, path):
-        self.close_clip()
+        self.close_clip() # Resetta prima
+        
         self.current_video_path = path
         filename = os.path.basename(path)
-        self.drop_section.set_text(f"File caricato:\n{filename}")
-        self.drop_section.set_active_style()
-        self.drop_section.close_btn.show()
+        
+        # Imposta stato UI
+        self.drop_section.set_loaded_state(True, filename)
         
         si = subprocess.STARTUPINFO()
         si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
@@ -451,16 +462,21 @@ class MainWindow(QMainWindow):
         filter_str += f"amix=inputs={len(selected)}[mixed];[mixed]dynaudnorm[aout]"
         cmd.extend(['-filter_complex', filter_str, '-map', '[aout]', '-c:a', 'aac', '-b:a', '192k', out_path])
         
-        self.drop_section.set_text("Esportazione in corso...")
+        # Qui usiamo la label della drop section per mostrare status (temporaneamente, anche se è "occupata" dal nome file)
+        # Ma poiché l'export è bloccante (subprocess.run) o quasi, va bene.
+        # Oppure possiamo aggiungere una label di status dedicata.
+        # Per ora usiamo un cursore di attesa.
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         QApplication.processEvents()
         
         si = subprocess.STARTUPINFO()
         si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
         try:
             subprocess.run(cmd, check=True, startupinfo=si)
+            QApplication.restoreOverrideCursor()
             QMessageBox.information(self, "Fatto", f"Video esportato:\n{out_path}")
-            self.drop_section.set_text(f"Esportazione completata!\n{os.path.basename(out_path)}")
         except subprocess.CalledProcessError:
+            QApplication.restoreOverrideCursor()
             QMessageBox.critical(self, "Errore", "Errore durante l'esportazione.")
 
     def closeEvent(self, event):
