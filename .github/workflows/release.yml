@@ -24,7 +24,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        # Installiamo pyinstaller e PyQt6 (che include automaticamente le dipendenze necessarie)
+        # Installiamo solo PyQt6 e PyInstaller (Niente NumPy)
         pip install PyQt6 pyinstaller
 
     - name: Download and Setup FFmpeg
@@ -37,17 +37,18 @@ jobs:
         Remove-Item "ffmpeg.zip"
         Remove-Item "ffmpeg_temp" -Recurse -Force
 
-    # CORREZIONE QUI SOTTO:
-    # Abbiamo RIMOSSO --exclude-module PyQt6.QtNetwork e PyQt6.QtQml
-    # perché sono necessari per il funzionamento del player audio.
     - name: Build with PyInstaller
       run: |
-        python -m PyInstaller --noconsole --onefile --name "AudioMerger" --add-binary "ffmpeg.exe;." --add-binary "ffprobe.exe;." --exclude-module numpy --exclude-module matplotlib --exclude-module tkinter --exclude-module unittest --exclude-module email --exclude-module http --exclude-module xml --exclude-module pydoc --exclude-module PyQt6.QtWebEngine --exclude-module PyQt6.QtWebEngineCore --exclude-module PyQt6.QtWebEngineWidgets --exclude-module PyQt6.QtSql mixer.py
+        # Configurazione OTTIMIZZATA:
+        # - Exclude QtWebEngine (pesante e inutile qui)
+        # - Exclude NumPy/Matplotlib/Tkinter
+        # - MANTIENE QtNetwork/QtMultimedia (essenziali per l'audio)
+        python -m PyInstaller --noconsole --onefile --name "AudioMerge" --add-binary "ffmpeg.exe;." --add-binary "ffprobe.exe;." --exclude-module numpy --exclude-module matplotlib --exclude-module tkinter --exclude-module unittest --exclude-module email --exclude-module http --exclude-module xml --exclude-module pydoc --exclude-module PyQt6.QtWebEngine --exclude-module PyQt6.QtWebEngineCore --exclude-module PyQt6.QtWebEngineWidgets --exclude-module PyQt6.QtSql mixer.py
 
     - name: Create Release
       uses: softprops/action-gh-release@v2
       if: startsWith(github.ref, 'refs/tags/')
       with:
-        files: dist/AudioMerger.exe
+        files: dist/AudioMerge.exe
         generate_release_notes: true
         make_latest: true
