@@ -840,7 +840,7 @@ class MainWindow(QMainWindow):
         self.exporter.start()
 
     def on_export_done(self, success, msg):
-        self.btn_export.setEnabled(True); self.btn_export.setText("EXPORT CUT & MIX")
+        self.btn_export.setEnabled(True); self.btn_export.setText("EXPORT")
         if success: QMessageBox.information(self, "Done", msg)
         else: QMessageBox.critical(self, "Error", msg)
 
