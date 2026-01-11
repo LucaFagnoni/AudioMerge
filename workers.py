@@ -1,7 +1,7 @@
 import subprocess
 import re
 from PyQt6.QtCore import QThread, pyqtSignal
-from utils import FFMPEG_BIN
+from utils import FFMPEG_BIN, FFPROBE_BIN
 
 class AudioExtractorThread(QThread):
     finished_extraction = pyqtSignal(str, str) # path, index
@@ -16,8 +16,6 @@ class AudioExtractorThread(QThread):
         si = subprocess.STARTUPINFO()
         si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
         
-        # Estraiamo l'INTERA traccia, ma a bassa qualità (8000Hz) per la waveform visuale
-        # Questo riduce drasticamente il peso del file WAV temporaneo e la memoria RAM usata
         cmd = [
             FFMPEG_BIN, '-y', '-i', self.input_video,
             '-map', f'0:a:{self.track_index}',
@@ -27,7 +25,6 @@ class AudioExtractorThread(QThread):
         try:
             subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, startupinfo=si)
         except FileNotFoundError:
-            # Fallback
             cmd[0] = 'ffmpeg'
             subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, startupinfo=si)
             
@@ -58,10 +55,8 @@ class ExportThread(QThread):
                 startupinfo=si
             )
 
-            # Regex per leggere il tempo corrente di encoding
             time_pattern = re.compile(r"time=(\d{2}:\d{2}:\d{2}\.\d{2})")
             
-            # Helper locale per parsing
             def parse_time(t_str):
                 try:
                     h, m, s = t_str.split(':')
@@ -94,3 +89,59 @@ class ExportThread(QThread):
         self.is_running = False
         if self.process:
             self.process.terminate()
+
+class KeyframeLoaderThread(QThread):
+    keyframes_found = pyqtSignal(list)
+
+    def __init__(self, video_path):
+        super().__init__()
+        self.video_path = video_path
+
+    def run(self):
+        si = subprocess.STARTUPINFO()
+        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        
+        # Metodo ottimizzato: Legge i pacchetti invece dei frame.
+        # Filtra solo i pacchetti video che hanno il flag 'K' (Keyframe)
+        # Molto più veloce e affidabile del metodo precedente.
+        cmd = [
+            FFPROBE_BIN, 
+            "-v", "error",
+            "-select_streams", "v:0", 
+            "-show_entries", "packet=pts_time,flags", 
+            "-of", "csv=p=0", 
+            self.video_path
+        ]
+        
+        try:
+            process = subprocess.Popen(
+                cmd, 
+                stdout=subprocess.PIPE, 
+                stderr=subprocess.DEVNULL,
+                text=True,
+                startupinfo=si
+            )
+            
+            stdout, _ = process.communicate()
+            
+            kf_list = []
+            for line in stdout.splitlines():
+                # Esempio output: "12.045000,K__" oppure "12.045000,K"
+                parts = line.strip().split(',')
+                if len(parts) >= 2:
+                    timestamp = parts[0]
+                    flags = parts[1]
+                    # Se c'è la K nei flags, è un keyframe
+                    if 'K' in flags:
+                        try:
+                            # Salva in millisecondi
+                            ms = int(float(timestamp) * 1000)
+                            kf_list.append(ms)
+                        except ValueError:
+                            pass
+            
+            self.keyframes_found.emit(kf_list)
+            
+        except Exception as e:
+            print(f"Keyframe load error: {e}")
+            self.keyframes_found.emit([])
