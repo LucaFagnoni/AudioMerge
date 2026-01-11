@@ -113,7 +113,6 @@ class MainTimeline(QWidget):
         if self.nearest_keyframe >= 0:
             x_key = int((self.nearest_keyframe / self.duration) * w)
             painter.setPen(QPen(QColor("#ffd700"), 2))
-            # Disegna una linea un po' più alta per distinguerla
             painter.drawLine(x_key, 0, x_key, h)
 
         # Markers In/Out
@@ -293,72 +292,53 @@ class AudioTrackWidget(QFrame):
         except: pass
 
 
-# --- VIDEO PLAYER VIEW ---
-class VideoPlayerView(QGraphicsView):
-    file_dropped = pyqtSignal(str)
+# --- VIDEO OVERLAY WIDGET (BEAUTIFIED) ---
+class VideoOverlay(QWidget):
     close_clicked = pyqtSignal()
+    file_dropped = pyqtSignal(str)
 
-    def __init__(self):
-        super().__init__()
-        self.scene = QGraphicsScene(self)
-        self.setScene(self.scene)
-        self.video_item = QGraphicsVideoItem()
-        self.video_item.setAspectRatioMode(Qt.AspectRatioMode.KeepAspectRatio)
-        self.scene.addItem(self.video_item)
-        self.video_item.nativeSizeChanged.connect(self._on_native_size_changed)
-        
-        self.setStyleSheet("background: black; border: none;")
-        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    def __init__(self, parent=None):
+        super().__init__(parent)
         self.setAcceptDrops(True)
-        
         self.is_hovering = False
         self.is_dragging = False
         
+        # Info Frame Counter
         self.info_keyframe = 0
         self.info_current_frame = 0
         self.info_total_frames = 0
         
-        self.setMouseTracking(True) 
+        self.setMouseTracking(True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
 
-    def update_overlay_info(self, key, curr, tot):
+    def update_info(self, key, curr, tot):
         self.info_keyframe = key
         self.info_current_frame = curr
         self.info_total_frames = tot
-        self.viewport().update()
+        self.update()
 
-    def _on_native_size_changed(self, size):
-        if size.isValid():
-            self.video_item.setSize(size)
-            self.scene.setSceneRect(0, 0, size.width(), size.height())
-            self.fitInView(self.video_item, Qt.AspectRatioMode.KeepAspectRatio)
-
-    def resizeEvent(self, event):
-        if self.video_item.size().isValid():
-            self.fitInView(self.video_item, Qt.AspectRatioMode.KeepAspectRatio)
-        super().resizeEvent(event)
-
-    def drawForeground(self, painter, rect):
-        painter.save()
-        painter.resetTransform()
-        view_rect = self.viewport().rect()
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         
+        rect = self.rect()
+        
+        # --- 1. Info Box (Sempre visibile se c'è un video) ---
         if self.info_total_frames > 0:
-            self._draw_info_box(painter, view_rect)
+            self._draw_info_box(painter, rect)
 
+        # --- 2. Interactive Overlays ---
         if self.is_dragging:
-            self._draw_overlay_box(painter, view_rect, QColor(0, 188, 212, 150), "⬇ DROP NEW VIDEO", dashed=True)
+            self._draw_overlay_box(painter, rect, QColor(0, 188, 212, 150), "DROP VIDEO", dashed=True)
         elif self.is_hovering:
-            self._draw_overlay_box(painter, view_rect, QColor(255, 0, 0, 100), "✖ CLOSE VIDEO", dashed=False)
-            
-        painter.restore()
+            self._draw_overlay_box(painter, rect, QColor(255, 0, 0, 100), "CLOSE VIDEO", dashed=False)
 
     def _draw_info_box(self, painter, rect):
         key = self.info_keyframe
         curr = self.info_current_frame
         tot = self.info_total_frames
         
-        # Testo completo per misurare
         text_full = f"({key}) {curr} / {tot}"
         
         font = QFont("Consolas", 12, QFont.Weight.Bold)
@@ -368,22 +348,19 @@ class VideoPlayerView(QGraphicsView):
         text_w = metrics.horizontalAdvance(text_full) + 20
         text_h = metrics.height() + 10
         
-        # Posizione in basso a destra
         x = rect.width() - text_w - 20
         y = rect.height() - text_h - 20
         
-        # Sfondo
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor(0, 0, 0, 180))
         painter.drawRoundedRect(QRectF(x, y, text_w, text_h), 5, 5)
         
-        # Disegno Testo Colorato
-        # Parte Gialla: (Key)
+        # Testo Giallo
         key_str = f"({key})"
         painter.setPen(QColor("#ffd700"))
         painter.drawText(int(x + 10), int(y + metrics.ascent() + 5), key_str)
         
-        # Parte Bianca: rest
+        # Testo Bianco
         key_w = metrics.horizontalAdvance(key_str + " ")
         painter.setPen(QColor("white"))
         painter.drawText(int(x + 10 + key_w), int(y + metrics.ascent() + 5), f"{curr} / {tot}")
@@ -404,47 +381,119 @@ class VideoPlayerView(QGraphicsView):
         draw_rect = rect.adjusted(margin, margin, -margin, -margin)
         painter.drawRoundedRect(draw_rect, 20, 20)
         
+        center = rect.center()
+        
+        # Icona (Freccia o X)
+        painter.setPen(QPen(QColor("white"), 6, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        cx, cy = center.x(), center.y() - 20
+        
+        if dashed: # Drop Arrow
+            path = QPainterPath()
+            path.moveTo(cx - 20, cy - 20); path.lineTo(cx + 20, cy - 20)
+            path.lineTo(cx + 20, cy + 10); path.lineTo(cx + 35, cy + 10)
+            path.lineTo(cx, cy + 50);      path.lineTo(cx - 35, cy + 10)
+            path.lineTo(cx - 20, cy + 10); path.closeSubpath()
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor("white"))
+            painter.drawPath(path)
+        else: # Close X
+            size = 30
+            painter.drawLine(int(cx - size), int(cy - size), int(cx + size), int(cy + size))
+            painter.drawLine(int(cx + size), int(cy - size), int(cx - size), int(cy + size))
+
         painter.setPen(QColor("white"))
         font = QFont("Segoe UI", 24, QFont.Weight.Bold)
         painter.setFont(font)
-        painter.drawText(draw_rect, Qt.AlignmentFlag.AlignCenter, text)
+        painter.drawText(QRectF(0, cy + 50, rect.width(), 50), Qt.AlignmentFlag.AlignCenter, text)
 
     def enterEvent(self, event):
         self.is_hovering = True
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.viewport().update() 
+        self.update()
         super().enterEvent(event)
 
     def leaveEvent(self, event):
         self.is_hovering = False
         self.setCursor(Qt.CursorShape.ArrowCursor)
-        self.viewport().update()
+        self.update()
         super().leaveEvent(event)
 
     def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton: self.close_clicked.emit()
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.close_clicked.emit()
         super().mousePressEvent(event)
 
-    def dragEnterEvent(self, event):
+    def dragEnterEvent(self, event: QDragEnterEvent):
         if event.mimeData().hasUrls():
             self.is_dragging = True
-            self.viewport().update()
+            self.update()
             event.acceptProposedAction()
         else: event.ignore()
 
-    def dragMoveEvent(self, event):
+    def dragMoveEvent(self, event: QDragMoveEvent):
         if event.mimeData().hasUrls(): event.acceptProposedAction()
         else: event.ignore()
 
     def dragLeaveEvent(self, event):
         self.is_dragging = False
-        self.viewport().update()
+        self.update()
         super().dragLeaveEvent(event)
 
-    def dropEvent(self, event):
-        self.is_dragging = False; self.is_hovering = False; self.viewport().update()
+    def dropEvent(self, event: QDropEvent):
+        self.is_dragging = False
+        self.is_hovering = False
+        self.update()
         files = [u.toLocalFile() for u in event.mimeData().urls()]
         if files: self.file_dropped.emit(files[0])
+
+
+# --- VIDEO PLAYER VIEW ---
+class VideoPlayerView(QGraphicsView):
+    file_dropped = pyqtSignal(str)
+    close_clicked = pyqtSignal()
+
+    def __init__(self):
+        super().__init__()
+        
+        self.scene = QGraphicsScene(self)
+        self.setScene(self.scene)
+        
+        self.video_item = QGraphicsVideoItem()
+        self.video_item.setAspectRatioMode(Qt.AspectRatioMode.KeepAspectRatio)
+        self.scene.addItem(self.video_item)
+        
+        self.video_item.nativeSizeChanged.connect(self._on_native_size_changed)
+        
+        self.setStyleSheet("background: black; border: none;")
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setAcceptDrops(True)
+        
+        # Overlay integrato come Child Widget
+        self.overlay = VideoOverlay(self)
+        self.overlay.close_clicked.connect(self.close_clicked)
+        self.overlay.file_dropped.connect(self.file_dropped)
+
+    def update_overlay_info(self, key, curr, tot):
+        self.overlay.update_info(key, curr, tot)
+
+    def _on_native_size_changed(self, size):
+        if size.isValid():
+            self.video_item.setSize(size)
+            self.scene.setSceneRect(0, 0, size.width(), size.height())
+            self.fitInView(self.video_item, Qt.AspectRatioMode.KeepAspectRatio)
+
+    def resizeEvent(self, event):
+        if self.video_item.size().isValid():
+            self.fitInView(self.video_item, Qt.AspectRatioMode.KeepAspectRatio)
+        self.overlay.resize(event.size())
+        super().resizeEvent(event)
+
+    # Inoltra eventi di drag all'overlay
+    def dragEnterEvent(self, event): self.overlay.dragEnterEvent(event)
+    def dragMoveEvent(self, event): self.overlay.dragMoveEvent(event)
+    def dragLeaveEvent(self, event): self.overlay.dragLeaveEvent(event)
+    def dropEvent(self, event): self.overlay.dropEvent(event)
 
 
 # --- START SCREEN ---
@@ -453,11 +502,11 @@ class StartScreen(QWidget):
         super().__init__()
         layout = QVBoxLayout(self)
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lbl_title = QLabel("Video Cutter & Mixer")
+        lbl_title = QLabel("MixCut")
         lbl_title.setStyleSheet("font-size: 24px; font-weight: bold; color: #00bcd4; margin-bottom: 20px;")
-        lbl_desc = QLabel("Drag & Drop a video file here")
+        lbl_desc = QLabel("Drag & Drop a video here")
         lbl_desc.setStyleSheet("color: #aaa; font-size: 16px; margin: 10px;")
-        btn_load = QPushButton("Open Video File")
+        btn_load = QPushButton("Open Video")
         btn_load.setFixedSize(200, 50)
         btn_load.setStyleSheet("background-color: #0078d7; font-size: 16px; font-weight: bold; border-radius: 8px;")
         btn_load.clicked.connect(load_callback)
@@ -490,6 +539,7 @@ class MainWindow(QMainWindow):
             QSlider::handle:vertical { background: #00bcd4; height: 10px; margin: 0 -4px; border-radius: 5px; }
         """)
 
+        # Stacked Widget
         self.stack = QStackedWidget()
         self.setCentralWidget(self.stack)
         self.start_screen = StartScreen(self.open_file_dialog)
@@ -499,6 +549,7 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self.editor_widget)
         self.stack.setCurrentIndex(0)
 
+        # Check dependencies
         self.check_ffmpeg()
 
     def setup_editor_ui(self):
@@ -562,14 +613,17 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(self.scroll, stretch=1)
 
         footer = QHBoxLayout()
-        self.chk_precise = QCheckBox("Precise Cut (Re-encode)")
-        self.chk_precise.setChecked(True)
         
         self.chk_autosave = QCheckBox("Export to source folder (_cut)")
-        self.btn_export = QPushButton("EXPORT CUT & MIX")
+        self.chk_autosave.setChecked(True)
+        
+        self.btn_export = QPushButton("EXPORT")
         self.btn_export.setFixedHeight(40)
         self.btn_export.setStyleSheet("background-color: #0078d7; font-weight: bold;")
         self.btn_export.clicked.connect(self.export)
+
+        self.chk_precise = QCheckBox("Precise Cut (Re-encode)")
+        self.chk_precise.setChecked(False)
         
         footer.addWidget(self.chk_precise)
         footer.addSpacing(20)
@@ -656,7 +710,6 @@ class MainWindow(QMainWindow):
 
     def on_keyframes_loaded(self, keyframes):
         self.keyframes = sorted(keyframes)
-        # Forza un update della UI ora che abbiamo i dati
         self.on_position_changed(self.player.position())
 
     def on_track_sync_request(self, track_widget):
@@ -680,28 +733,19 @@ class MainWindow(QMainWindow):
         key_frame = 0
         
         if self.keyframes:
-            # Trova il keyframe più vicino in assoluto
             idx = bisect.bisect_left(self.keyframes, pos)
             closest_ms = 0
-            
-            # Controlla l'elemento trovato e quello precedente per vedere chi è più vicino
-            if idx == 0:
-                closest_ms = self.keyframes[0]
-            elif idx == len(self.keyframes):
-                closest_ms = self.keyframes[-1]
+            if idx == 0: closest_ms = self.keyframes[0]
+            elif idx == len(self.keyframes): closest_ms = self.keyframes[-1]
             else:
                 before = self.keyframes[idx - 1]
                 after = self.keyframes[idx]
-                if abs(pos - before) < abs(after - pos):
-                    closest_ms = before
-                else:
-                    closest_ms = after
+                closest_ms = before if abs(pos - before) < abs(after - pos) else after
             
             key_frame = int((closest_ms / 1000.0) * self.fps)
             self.timeline.set_nearest_keyframe(closest_ms)
         
         self.video_view.update_overlay_info(key_frame, current_frame, self.total_frames)
-        
         for t in self.tracks: t.sync_position(pos)
 
     def update_play_icon(self, state):
