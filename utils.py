@@ -27,3 +27,11 @@ def time_str_to_seconds(time_str):
         return float(parts[0]) * 3600 + float(parts[1]) * 60 + float(parts[2])
     except:
         return 0.0
+        
+def resource_path(relative_path):
+    """ Ottiene il percorso assoluto, funziona per dev e per PyInstaller """
+    try:
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)

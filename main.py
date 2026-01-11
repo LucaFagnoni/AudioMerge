@@ -12,8 +12,8 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QLabel, QPushButton, QCheckBox, 
                              QScrollArea, QFileDialog, QMessageBox, QFrame, 
                              QSizePolicy, QSlider, QDoubleSpinBox, QStackedWidget, 
-                             QGraphicsView, QGraphicsScene, QStyle)
-from PyQt6.QtCore import Qt, QUrl, pyqtSignal, QSize, QEvent, QRectF, QPointF
+                             QGraphicsView, QGraphicsScene, QStyle, QGridLayout)
+from PyQt6.QtCore import Qt, QUrl, pyqtSignal, QSize, QEvent, QRectF
 from PyQt6.QtGui import (QPainter, QColor, QPen, QBrush, QAction, QKeySequence, 
                          QDragEnterEvent, QDropEvent, QDragMoveEvent, QIcon, QFont, 
                          QLinearGradient, QPainterPath)
@@ -292,7 +292,7 @@ class AudioTrackWidget(QFrame):
         except: pass
 
 
-# --- VIDEO OVERLAY WIDGET (UNIFORM STYLE) ---
+# --- VIDEO OVERLAY WIDGET ---
 class VideoOverlay(QWidget):
     close_clicked = pyqtSignal()
     file_dropped = pyqtSignal(str)
@@ -303,7 +303,6 @@ class VideoOverlay(QWidget):
         self.is_hovering = False
         self.is_dragging = False
         
-        # Info Frame Counter
         self.info_keyframe = 0
         self.info_current_frame = 0
         self.info_total_frames = 0
@@ -324,19 +323,17 @@ class VideoOverlay(QWidget):
         
         rect = self.rect()
         
-        # --- 1. Info Box (Sempre visibile) ---
         if self.info_total_frames > 0:
             self._draw_info_box(painter, rect)
 
-        # --- 2. Interactive Overlays (Dimmed Background) ---
-        if self.is_dragging or self.is_hovering:
-            # Sfondo unificato per entrambi gli stati (scurisce il video)
+        if self.is_dragging:
+            # Scurisce sfondo per Drag
             painter.fillRect(rect, QColor(0, 0, 0, 160))
-            
-            if self.is_dragging:
-                self._draw_central_feedback(painter, rect, QColor("#00e5ff"), "Drop", is_drop=True)
-            elif self.is_hovering:
-                self._draw_central_feedback(painter, rect, QColor("#ff5252"), "Close", is_drop=False)
+            self._draw_central_feedback(painter, rect, QColor("#00e5ff"), "DROP VIDEO", is_drop=True)
+        elif self.is_hovering:
+            # Scurisce sfondo per Close
+            painter.fillRect(rect, QColor(0, 0, 0, 160))
+            self._draw_central_feedback(painter, rect, QColor("#ff5252"), "CLOSE VIDEO", is_drop=False)
 
     def _draw_info_box(self, painter, rect):
         key, curr, tot = self.info_keyframe, self.info_current_frame, self.info_total_frames
@@ -348,7 +345,9 @@ class VideoOverlay(QWidget):
         
         text_w = metrics.horizontalAdvance(text_full) + 20
         text_h = metrics.height() + 10
-        x, y = rect.width() - text_w - 20, rect.height() - text_h - 20
+        
+        x = rect.width() - text_w - 20
+        y = rect.height() - text_h - 20
         
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor(0, 0, 0, 180))
@@ -361,30 +360,23 @@ class VideoOverlay(QWidget):
         painter.drawText(int(x + 10 + key_w), int(y + metrics.ascent() + 5), f"{curr} / {tot}")
 
     def _draw_central_feedback(self, painter, rect, accent_color, text, is_drop):
-        """Disegna il box centrale unificato per Drop e Close"""
-        
-        # Dimensioni Box Centrale
         box_w, box_h = 280, 180
         center = rect.center()
         box_rect = QRectF(center.x() - box_w/2, center.y() - box_h/2, box_w, box_h)
         
-        # Bordo
         pen = QPen(accent_color)
         pen.setWidth(4)
         pen.setStyle(Qt.PenStyle.DashLine if is_drop else Qt.PenStyle.SolidLine)
         painter.setPen(pen)
         
-        # Sfondo Box
         painter.setBrush(QColor(30, 30, 30, 200))
         painter.drawRoundedRect(box_rect, 20, 20)
         
-        # Icona
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(accent_color)
         cx, cy = center.x(), center.y() - 15
         
         if is_drop:
-            # Freccia Giù
             path = QPainterPath()
             path.moveTo(cx - 20, cy - 30); path.lineTo(cx + 20, cy - 30)
             path.lineTo(cx + 20, cy + 5); path.lineTo(cx + 40, cy + 5)
@@ -392,19 +384,16 @@ class VideoOverlay(QWidget):
             path.lineTo(cx - 20, cy + 5); path.closeSubpath()
             painter.drawPath(path)
         else:
-            # X (Croce)
             painter.setPen(QPen(accent_color, 8, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
             off = 25
             painter.drawLine(int(cx - off), int(cy - off), int(cx + off), int(cy + off))
             painter.drawLine(int(cx + off), int(cy - off), int(cx - off), int(cy + off))
 
-        # Testo
         painter.setPen(QColor("white"))
         font = QFont("Segoe UI", 20, QFont.Weight.Bold)
         painter.setFont(font)
         painter.drawText(QRectF(box_rect.left(), cy + 50, box_w, 40), Qt.AlignmentFlag.AlignCenter, text)
 
-    # --- EVENTI ---
     def enterEvent(self, event):
         self.is_hovering = True
         self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -511,7 +500,7 @@ class StartScreen(QWidget):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Video Cutter & Mixer")
+        self.setWindowTitle("MixCut")
         self.resize(1000, 800)
         self.setAcceptDrops(True)
         
@@ -532,7 +521,6 @@ class MainWindow(QMainWindow):
             QSlider::handle:vertical { background: #00bcd4; height: 10px; margin: 0 -4px; border-radius: 5px; }
         """)
 
-        # Stacked Widget
         self.stack = QStackedWidget()
         self.setCentralWidget(self.stack)
         self.start_screen = StartScreen(self.open_file_dialog)
@@ -542,7 +530,6 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self.editor_widget)
         self.stack.setCurrentIndex(0)
 
-        # Check dependencies
         self.check_ffmpeg()
 
     def setup_editor_ui(self):
@@ -554,11 +541,19 @@ class MainWindow(QMainWindow):
         self.video_view.file_dropped.connect(self.load_video)
         main_layout.addWidget(self.video_view, stretch=2)
 
-        controls_layout = QHBoxLayout()
+        # --- CONTROLS LAYOUT (GRID FOR PERFECT CENTERING) ---
+        controls_container = QWidget()
+        controls_layout = QGridLayout(controls_container)
+        controls_layout.setContentsMargins(0, 0, 0, 0)
+
+        # Left Group
+        left_widget = QWidget()
+        left_box = QHBoxLayout(left_widget); left_box.setContentsMargins(0,0,0,0)
         
-        self.lbl_in_frame = QLabel("In: 0")
+        self.lbl_in_frame = QLabel("Start: 0")
         self.lbl_in_frame.setStyleSheet("color: #00ff00; font-weight: bold;")
-        self.lbl_out_frame = QLabel("Out: 0")
+        
+        self.lbl_out_frame = QLabel("End: 0")
         self.lbl_out_frame.setStyleSheet("color: #ff0000; font-weight: bold;")
 
         def create_btn(icon_file, system_icon, text, func, shortcut=None, tooltip=""):
@@ -579,17 +574,32 @@ class MainWindow(QMainWindow):
         self.btn_next = create_btn("next.png", QStyle.StandardPixmap.SP_MediaSeekForward, ">", self.step_fwd, None, "Next Frame")
         self.btn_out = create_btn("out.png", QStyle.StandardPixmap.SP_MediaSkipForward, "[ O ]", self.set_out_point, "O", "Set OUT Point")
 
-        controls_layout.addWidget(self.lbl_in_frame)
-        controls_layout.addWidget(self.btn_in)
-        controls_layout.addStretch()
-        controls_layout.addWidget(self.btn_prev)
-        controls_layout.addWidget(self.btn_play)
-        controls_layout.addWidget(self.btn_next)
-        controls_layout.addStretch()
-        controls_layout.addWidget(self.btn_out)
-        controls_layout.addWidget(self.lbl_out_frame)
+        left_box.addWidget(self.btn_in)
+        left_box.addWidget(self.lbl_in_frame)
         
-        main_layout.addLayout(controls_layout)
+        # Center Group
+        center_widget = QWidget()
+        center_box = QHBoxLayout(center_widget); center_box.setContentsMargins(0,0,0,0)
+        center_box.addWidget(self.btn_prev)
+        center_box.addWidget(self.btn_play)
+        center_box.addWidget(self.btn_next)
+
+        # Right Group
+        right_widget = QWidget()
+        right_box = QHBoxLayout(right_widget); right_box.setContentsMargins(0,0,0,0)
+        right_box.addWidget(self.lbl_out_frame)
+        right_box.addWidget(self.btn_out)
+
+        # Add to Grid
+        controls_layout.addWidget(left_widget, 0, 0, Qt.AlignmentFlag.AlignLeft)
+        controls_layout.addWidget(center_widget, 0, 1, Qt.AlignmentFlag.AlignCenter)
+        controls_layout.addWidget(right_widget, 0, 2, Qt.AlignmentFlag.AlignRight)
+        
+        # Stretches
+        controls_layout.setColumnStretch(0, 1)
+        controls_layout.setColumnStretch(2, 1)
+        
+        main_layout.addWidget(controls_container)
 
         self.timeline = MainTimeline()
         self.timeline.seek_requested.connect(self.seek_all)
@@ -610,13 +620,13 @@ class MainWindow(QMainWindow):
         self.chk_autosave = QCheckBox("Export to source folder (_cut)")
         self.chk_autosave.setChecked(True)
         
+        self.chk_precise = QCheckBox("Precise Cut (Re-encode)")
+        self.chk_precise.setChecked(False)
+        
         self.btn_export = QPushButton("EXPORT")
         self.btn_export.setFixedHeight(40)
         self.btn_export.setStyleSheet("background-color: #0078d7; font-weight: bold;")
         self.btn_export.clicked.connect(self.export)
-
-        self.chk_precise = QCheckBox("Precise Cut (Re-encode)")
-        self.chk_precise.setChecked(False)
         
         footer.addWidget(self.chk_precise)
         footer.addSpacing(20)
