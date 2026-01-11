@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QScrollArea, QFileDialog, QMessageBox, QFrame, 
                              QSizePolicy, QSlider, QDoubleSpinBox, QStackedWidget, 
                              QGraphicsView, QGraphicsScene, QStyle)
-from PyQt6.QtCore import Qt, QUrl, pyqtSignal, QSize, QEvent, QRectF
+from PyQt6.QtCore import Qt, QUrl, pyqtSignal, QSize, QEvent, QRectF, QPointF
 from PyQt6.QtGui import (QPainter, QColor, QPen, QBrush, QAction, QKeySequence, 
                          QDragEnterEvent, QDropEvent, QDragMoveEvent, QIcon, QFont, 
                          QLinearGradient, QPainterPath)
@@ -292,7 +292,7 @@ class AudioTrackWidget(QFrame):
         except: pass
 
 
-# --- VIDEO OVERLAY WIDGET (BEAUTIFIED) ---
+# --- VIDEO OVERLAY WIDGET (UNIFORM STYLE) ---
 class VideoOverlay(QWidget):
     close_clicked = pyqtSignal()
     file_dropped = pyqtSignal(str)
@@ -324,21 +324,22 @@ class VideoOverlay(QWidget):
         
         rect = self.rect()
         
-        # --- 1. Info Box (Sempre visibile se c'è un video) ---
+        # --- 1. Info Box (Sempre visibile) ---
         if self.info_total_frames > 0:
             self._draw_info_box(painter, rect)
 
-        # --- 2. Interactive Overlays ---
-        if self.is_dragging:
-            self._draw_overlay_box(painter, rect, QColor(0, 188, 212, 150), "DROP VIDEO", dashed=True)
-        elif self.is_hovering:
-            self._draw_overlay_box(painter, rect, QColor(255, 0, 0, 100), "CLOSE VIDEO", dashed=False)
+        # --- 2. Interactive Overlays (Dimmed Background) ---
+        if self.is_dragging or self.is_hovering:
+            # Sfondo unificato per entrambi gli stati (scurisce il video)
+            painter.fillRect(rect, QColor(0, 0, 0, 160))
+            
+            if self.is_dragging:
+                self._draw_central_feedback(painter, rect, QColor("#00e5ff"), "Drop", is_drop=True)
+            elif self.is_hovering:
+                self._draw_central_feedback(painter, rect, QColor("#ff5252"), "Close", is_drop=False)
 
     def _draw_info_box(self, painter, rect):
-        key = self.info_keyframe
-        curr = self.info_current_frame
-        tot = self.info_total_frames
-        
+        key, curr, tot = self.info_keyframe, self.info_current_frame, self.info_total_frames
         text_full = f"({key}) {curr} / {tot}"
         
         font = QFont("Consolas", 12, QFont.Weight.Bold)
@@ -347,65 +348,63 @@ class VideoOverlay(QWidget):
         
         text_w = metrics.horizontalAdvance(text_full) + 20
         text_h = metrics.height() + 10
-        
-        x = rect.width() - text_w - 20
-        y = rect.height() - text_h - 20
+        x, y = rect.width() - text_w - 20, rect.height() - text_h - 20
         
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor(0, 0, 0, 180))
         painter.drawRoundedRect(QRectF(x, y, text_w, text_h), 5, 5)
         
-        # Testo Giallo
-        key_str = f"({key})"
         painter.setPen(QColor("#ffd700"))
-        painter.drawText(int(x + 10), int(y + metrics.ascent() + 5), key_str)
-        
-        # Testo Bianco
-        key_w = metrics.horizontalAdvance(key_str + " ")
+        painter.drawText(int(x + 10), int(y + metrics.ascent() + 5), f"({key})")
+        key_w = metrics.horizontalAdvance(f"({key}) ")
         painter.setPen(QColor("white"))
         painter.drawText(int(x + 10 + key_w), int(y + metrics.ascent() + 5), f"{curr} / {tot}")
 
-    def _draw_overlay_box(self, painter, rect, bg_color, text, dashed):
-        painter.fillRect(rect, bg_color)
+    def _draw_central_feedback(self, painter, rect, accent_color, text, is_drop):
+        """Disegna il box centrale unificato per Drop e Close"""
         
-        pen_color = QColor("white")
-        if dashed: pen_color = QColor("#00e5ff")
-        
-        pen = QPen(pen_color)
-        pen.setWidth(4)
-        if dashed: pen.setStyle(Qt.PenStyle.DashLine)
-        painter.setPen(pen)
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        
-        margin = 40
-        draw_rect = rect.adjusted(margin, margin, -margin, -margin)
-        painter.drawRoundedRect(draw_rect, 20, 20)
-        
+        # Dimensioni Box Centrale
+        box_w, box_h = 280, 180
         center = rect.center()
+        box_rect = QRectF(center.x() - box_w/2, center.y() - box_h/2, box_w, box_h)
         
-        # Icona (Freccia o X)
-        painter.setPen(QPen(QColor("white"), 6, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
-        cx, cy = center.x(), center.y() - 20
+        # Bordo
+        pen = QPen(accent_color)
+        pen.setWidth(4)
+        pen.setStyle(Qt.PenStyle.DashLine if is_drop else Qt.PenStyle.SolidLine)
+        painter.setPen(pen)
         
-        if dashed: # Drop Arrow
+        # Sfondo Box
+        painter.setBrush(QColor(30, 30, 30, 200))
+        painter.drawRoundedRect(box_rect, 20, 20)
+        
+        # Icona
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(accent_color)
+        cx, cy = center.x(), center.y() - 15
+        
+        if is_drop:
+            # Freccia Giù
             path = QPainterPath()
-            path.moveTo(cx - 20, cy - 20); path.lineTo(cx + 20, cy - 20)
-            path.lineTo(cx + 20, cy + 10); path.lineTo(cx + 35, cy + 10)
-            path.lineTo(cx, cy + 50);      path.lineTo(cx - 35, cy + 10)
-            path.lineTo(cx - 20, cy + 10); path.closeSubpath()
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor("white"))
+            path.moveTo(cx - 20, cy - 30); path.lineTo(cx + 20, cy - 30)
+            path.lineTo(cx + 20, cy + 5); path.lineTo(cx + 40, cy + 5)
+            path.lineTo(cx, cy + 45);     path.lineTo(cx - 40, cy + 5)
+            path.lineTo(cx - 20, cy + 5); path.closeSubpath()
             painter.drawPath(path)
-        else: # Close X
-            size = 30
-            painter.drawLine(int(cx - size), int(cy - size), int(cx + size), int(cy + size))
-            painter.drawLine(int(cx + size), int(cy - size), int(cx - size), int(cy + size))
+        else:
+            # X (Croce)
+            painter.setPen(QPen(accent_color, 8, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+            off = 25
+            painter.drawLine(int(cx - off), int(cy - off), int(cx + off), int(cy + off))
+            painter.drawLine(int(cx + off), int(cy - off), int(cx - off), int(cy + off))
 
+        # Testo
         painter.setPen(QColor("white"))
-        font = QFont("Segoe UI", 24, QFont.Weight.Bold)
+        font = QFont("Segoe UI", 20, QFont.Weight.Bold)
         painter.setFont(font)
-        painter.drawText(QRectF(0, cy + 50, rect.width(), 50), Qt.AlignmentFlag.AlignCenter, text)
+        painter.drawText(QRectF(box_rect.left(), cy + 50, box_w, 40), Qt.AlignmentFlag.AlignCenter, text)
 
+    # --- EVENTI ---
     def enterEvent(self, event):
         self.is_hovering = True
         self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -419,8 +418,7 @@ class VideoOverlay(QWidget):
         super().leaveEvent(event)
 
     def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.close_clicked.emit()
+        if event.button() == Qt.MouseButton.LeftButton: self.close_clicked.emit()
         super().mousePressEvent(event)
 
     def dragEnterEvent(self, event: QDragEnterEvent):
@@ -454,14 +452,11 @@ class VideoPlayerView(QGraphicsView):
 
     def __init__(self):
         super().__init__()
-        
         self.scene = QGraphicsScene(self)
         self.setScene(self.scene)
-        
         self.video_item = QGraphicsVideoItem()
         self.video_item.setAspectRatioMode(Qt.AspectRatioMode.KeepAspectRatio)
         self.scene.addItem(self.video_item)
-        
         self.video_item.nativeSizeChanged.connect(self._on_native_size_changed)
         
         self.setStyleSheet("background: black; border: none;")
@@ -469,7 +464,6 @@ class VideoPlayerView(QGraphicsView):
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setAcceptDrops(True)
         
-        # Overlay integrato come Child Widget
         self.overlay = VideoOverlay(self)
         self.overlay.close_clicked.connect(self.close_clicked)
         self.overlay.file_dropped.connect(self.file_dropped)
@@ -489,7 +483,6 @@ class VideoPlayerView(QGraphicsView):
         self.overlay.resize(event.size())
         super().resizeEvent(event)
 
-    # Inoltra eventi di drag all'overlay
     def dragEnterEvent(self, event): self.overlay.dragEnterEvent(event)
     def dragMoveEvent(self, event): self.overlay.dragMoveEvent(event)
     def dragLeaveEvent(self, event): self.overlay.dragLeaveEvent(event)
