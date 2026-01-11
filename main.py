@@ -17,7 +17,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
 from PyQt6.QtCore import Qt, QUrl, pyqtSignal, QSize, QEvent, QRectF, QPointF
 from PyQt6.QtGui import (QPainter, QColor, QPen, QBrush, QAction, QKeySequence, 
                          QDragEnterEvent, QDropEvent, QDragMoveEvent, QIcon, QFont, 
-                         QLinearGradient, QPainterPath)
+                         QLinearGradient, QPainterPath, QPixmap)
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PyQt6.QtMultimediaWidgets import QGraphicsVideoItem
 
@@ -501,19 +501,93 @@ class VideoPlayerView(QGraphicsView):
 class StartScreen(QWidget):
     def __init__(self, load_callback):
         super().__init__()
+        
+        # Layout Principale
         layout = QVBoxLayout(self)
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.setSpacing(15) 
+        
+        # 1. Icona Applicazione (Grande)
+        lbl_icon = QLabel()
+        lbl_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        # Carica l'icona usando la funzione helper globale resource_path
+        # Assicurati che app_icon.ico sia presente nella root o nell'exe
+        icon_path = resource_path("app_icon.ico")
+        pixmap = QPixmap(icon_path)
+        
+        if not pixmap.isNull():
+            # Scaliamo l'icona per renderla grande (128x128) e nitida
+            pixmap = pixmap.scaled(128, 128, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            lbl_icon.setPixmap(pixmap)
+        else:
+            # Fallback testuale se l'icona non viene trovata
+            lbl_icon.setText("🎬")
+            lbl_icon.setStyleSheet("font-size: 100px; color: #555;")
+
+        # 2. Titolo (Stile moderno e grande)
         lbl_title = QLabel("MixCut")
-        lbl_title.setStyleSheet("font-size: 24px; font-weight: bold; color: #00bcd4; margin-bottom: 20px;")
-        lbl_desc = QLabel("Drag & Drop a video here")
-        lbl_desc.setStyleSheet("color: #aaa; font-size: 16px; margin: 10px;")
-        btn_load = QPushButton("Open Video")
-        btn_load.setFixedSize(200, 50)
-        btn_load.setStyleSheet("background-color: #0078d7; font-size: 16px; font-weight: bold; border-radius: 8px;")
+        lbl_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lbl_title.setStyleSheet("""
+            font-family: 'Segoe UI', sans-serif;
+            font-size: 48px; 
+            font-weight: 800; 
+            color: #00bcd4; 
+            letter-spacing: 2px;
+            margin-top: 10px;
+        """)
+        
+        # 3. Descrizione
+        lbl_desc = QLabel("Video Cutter & Audio Mixer\nDrag & Drop a video file to begin")
+        lbl_desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lbl_desc.setStyleSheet("""
+            font-family: 'Segoe UI', sans-serif;
+            color: #aaaaaa; 
+            font-size: 16px; 
+            font-weight: 400;
+            line-height: 1.4;
+        """)
+        
+        # 4. Bottone (Stile 'Call to Action')
+        btn_load = QPushButton("  Open Video")
+        btn_load.setCursor(Qt.CursorShape.PointingHandCursor)
+        # Aggiunge l'icona della cartella standard di sistema al bottone
+        btn_load.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon))
+        btn_load.setIconSize(QSize(24, 24))
+        
+        btn_load.setFixedHeight(55)
+        btn_load.setMinimumWidth(240)
+        
+        btn_load.setStyleSheet("""
+            QPushButton {
+                background-color: #0078d7; 
+                color: white; 
+                font-family: 'Segoe UI';
+                font-size: 17px; 
+                font-weight: 600; 
+                border-radius: 8px;
+                padding: 0 25px;
+                border: 1px solid #005a9e;
+            }
+            QPushButton:hover {
+                background-color: #0086f0;
+                border: 1px solid #0078d7;
+            }
+            QPushButton:pressed {
+                background-color: #005a9e;
+                padding-top: 2px; /* Effetto click */
+            }
+        """)
         btn_load.clicked.connect(load_callback)
-        layout.addWidget(lbl_title, alignment=Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(lbl_desc, alignment=Qt.AlignmentFlag.AlignCenter)
+        
+        # Aggiunta Widget al Layout con spaziature
+        layout.addStretch()
+        layout.addWidget(lbl_icon)
+        layout.addWidget(lbl_title)
+        layout.addWidget(lbl_desc)
+        layout.addSpacing(30)
         layout.addWidget(btn_load, alignment=Qt.AlignmentFlag.AlignCenter)
+        layout.addStretch()
 
 
 class MainWindow(QMainWindow):
