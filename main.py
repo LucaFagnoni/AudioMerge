@@ -12,9 +12,9 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QScrollArea, QFileDialog, QMessageBox, QFrame, 
                              QSizePolicy, QSlider, QDoubleSpinBox, QStackedWidget, 
                              QGraphicsView, QGraphicsScene, QStyle)
-from PyQt6.QtCore import Qt, QUrl, pyqtSignal, QSize, QEvent, QRectF
+from PyQt6.QtCore import Qt, QUrl, pyqtSignal, QSize, QEvent, QRectF, QPointF
 from PyQt6.QtGui import (QPainter, QColor, QPen, QBrush, QAction, QKeySequence, 
-                         QDragEnterEvent, QDropEvent, QDragMoveEvent, QIcon, QFont)
+                         QDragEnterEvent, QDropEvent, QIcon, QFont, QLinearGradient, QPainterPath)
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PyQt6.QtMultimediaWidgets import QGraphicsVideoItem
 
@@ -38,7 +38,8 @@ def load_custom_icon(name, fallback_text, system_icon=None):
 
     return QIcon(), fallback_text
 
-# --- TIMELINE WIDGET ---
+# --- CUSTOM WIDGETS ---
+
 class MainTimeline(QWidget):
     seek_requested = pyqtSignal(int)
 
@@ -110,7 +111,6 @@ class MainTimeline(QWidget):
         painter.setPen(QPen(QColor("#ffffff"), 2)); painter.drawLine(x_pos, 0, x_pos, h)
 
 
-# --- WAVEFORM WIDGET ---
 class WaveformWidget(QWidget):
     def __init__(self):
         super().__init__()
@@ -177,7 +177,6 @@ class WaveformWidget(QWidget):
             painter.drawLine(x_pos, 0, x_pos, h)
 
 
-# --- AUDIO TRACK WIDGET ---
 class AudioTrackWidget(QFrame):
     track_loaded = pyqtSignal(object) 
 
@@ -279,6 +278,144 @@ class AudioTrackWidget(QFrame):
         except: pass
 
 
+# --- VIDEO OVERLAY WIDGET (BEAUTIFIED) ---
+class VideoOverlay(QWidget):
+    close_clicked = pyqtSignal()
+    file_dropped = pyqtSignal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+        self.is_hovering = False
+        self.is_dragging = False
+        self.setMouseTracking(True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        # Importante: Non vogliamo che sia trasparente agli eventi
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
+
+    def paintEvent(self, event):
+        if not self.is_dragging and not self.is_hovering:
+            return
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        
+        rect = self.rect()
+        center = rect.center()
+
+        if self.is_dragging:
+            # --- STILE DRAG & DROP (Celeste Neon) ---
+            
+            # Sfondo scuro semitrasparente
+            painter.fillRect(rect, QColor(0, 0, 0, 180))
+            
+            # Bordo Tratteggiato
+            pen = QPen(QColor("#00bcd4")) # Cyan
+            pen.setWidth(4)
+            pen.setStyle(Qt.PenStyle.DashLine)
+            painter.setPen(pen)
+            
+            # Rettangolo interno (margine 20px)
+            draw_rect = rect.adjusted(20, 20, -20, -20)
+            painter.drawRoundedRect(draw_rect, 20, 20)
+            
+            # Icona Freccia Giù
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor("#00bcd4"))
+            
+            arrow_path = QPainterPath()
+            # Disegno vettoriale semplice di una freccia
+            cx, cy = center.x(), center.y() - 20
+            arrow_path.moveTo(cx - 30, cy - 30) # Top Left
+            arrow_path.lineTo(cx + 30, cy - 30) # Top Right
+            arrow_path.lineTo(cx + 30, cy + 10) # Shaft Right
+            arrow_path.lineTo(cx + 50, cy + 10) # Arrowhead Right Base
+            arrow_path.lineTo(cx, cy + 60)      # Tip
+            arrow_path.lineTo(cx - 50, cy + 10) # Arrowhead Left Base
+            arrow_path.lineTo(cx - 30, cy + 10) # Shaft Left
+            arrow_path.closeSubpath()
+            painter.drawPath(arrow_path)
+            
+            # Testo
+            painter.setPen(QColor("white"))
+            font = QFont("Segoe UI", 28, QFont.Weight.Bold)
+            painter.setFont(font)
+            painter.drawText(QRectF(0, center.y() + 50, rect.width(), 50), Qt.AlignmentFlag.AlignCenter, "DROP VIDEO HERE")
+            
+        elif self.is_hovering:
+            # --- STILE HOVER (Close / Danger) ---
+            
+            # Sfondo Gradiente Radiale (Rosso scuro al centro)
+            gradient = QLinearGradient(0, 0, 0, rect.height())
+            gradient.setColorAt(0, QColor(200, 0, 0, 40))
+            gradient.setColorAt(1, QColor(100, 0, 0, 150))
+            painter.fillRect(rect, QBrush(gradient))
+            
+            # Bordo Solido Sottile
+            pen = QPen(QColor("#ff5555"))
+            pen.setWidth(2)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRect(rect.adjusted(2,2,-2,-2))
+            
+            # Icona X Grande al centro
+            cx, cy = center.x(), center.y()
+            size = 40
+            
+            painter.setPen(QPen(QColor("white"), 6, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+            painter.drawLine(int(cx - size), int(cy - size), int(cx + size), int(cy + size))
+            painter.drawLine(int(cx + size), int(cy - size), int(cx - size), int(cy + size))
+            
+            # Testo
+            painter.setPen(QColor("white"))
+            font = QFont("Segoe UI", 20, QFont.Weight.Bold)
+            painter.setFont(font)
+            painter.drawText(QRectF(0, cy + 50, rect.width(), 40), Qt.AlignmentFlag.AlignCenter, "CLICK TO CLOSE")
+
+    def enterEvent(self, event):
+        self.is_hovering = True
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self.is_hovering = False
+        self.setCursor(Qt.CursorShape.ArrowCursor)
+        self.update()
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.close_clicked.emit()
+        super().mousePressEvent(event)
+
+    def dragEnterEvent(self, event: QDragEnterEvent):
+        if event.mimeData().hasUrls():
+            self.is_dragging = True
+            self.update()
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragLeaveEvent(self, event):
+        self.is_dragging = False
+        self.update()
+        super().dragLeaveEvent(event)
+
+    def dropEvent(self, event: QDropEvent):
+        self.is_dragging = False
+        self.is_hovering = False
+        self.update()
+        files = [u.toLocalFile() for u in event.mimeData().urls()]
+        if files: self.file_dropped.emit(files[0])
+
+
 # --- VIDEO PLAYER VIEW (QGraphicsView) ---
 class VideoPlayerView(QGraphicsView):
     file_dropped = pyqtSignal(str)
@@ -300,12 +437,12 @@ class VideoPlayerView(QGraphicsView):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         
-        # ABILITA IL DROP
-        self.setAcceptDrops(True)
+        # Overlay è figlio della View, non della Scena, così copre tutto ed è fisso
+        self.overlay = VideoOverlay(self)
+        self.overlay.close_clicked.connect(self.close_clicked)
+        self.overlay.file_dropped.connect(self.file_dropped)
         
-        self.is_hovering = False
-        self.is_dragging = False
-        self.setMouseTracking(True) 
+        self.setAcceptDrops(True)
 
     def _on_native_size_changed(self, size):
         if size.isValid():
@@ -316,68 +453,21 @@ class VideoPlayerView(QGraphicsView):
     def resizeEvent(self, event):
         if self.video_item.size().isValid():
             self.fitInView(self.video_item, Qt.AspectRatioMode.KeepAspectRatio)
+        
+        # Ridimensiona l'overlay per coprire l'intera view
+        self.overlay.resize(event.size())
+        
         super().resizeEvent(event)
 
-    def drawForeground(self, painter, rect):
-        if self.is_dragging:
-            painter.fillRect(rect, QColor(0, 188, 212, 150)) 
-            self._draw_centered_text(painter, rect, "⬇ DROP NEW VIDEO")
-        elif self.is_hovering:
-            painter.fillRect(rect, QColor(255, 0, 0, 100)) 
-            self._draw_centered_text(painter, rect, "✖ CLOSE VIDEO")
-
-    def _draw_centered_text(self, painter, rect, text):
-        painter.setPen(QColor("white"))
-        font = QFont("Arial", 24, QFont.Weight.Bold)
-        painter.setFont(font)
-        painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
-
-    # --- EVENTI MOUSE ---
-    def enterEvent(self, event):
-        self.is_hovering = True
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.scene.update() 
-        super().enterEvent(event)
-
-    def leaveEvent(self, event):
-        self.is_hovering = False
-        self.setCursor(Qt.CursorShape.ArrowCursor)
-        self.scene.update()
-        super().leaveEvent(event)
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.close_clicked.emit()
-        super().mousePressEvent(event)
-
-    # --- EVENTI DRAG & DROP (IL FIX È QUI) ---
-    def dragEnterEvent(self, event: QDragEnterEvent):
-        if event.mimeData().hasUrls():
-            self.is_dragging = True
-            self.scene.update()
-            event.acceptProposedAction() # Accetta l'ingresso
-        else: 
-            event.ignore()
-
-    def dragMoveEvent(self, event: QDragMoveEvent):
-        # QUESTO E' IL PEZZO MANCANTE FONDAMENTALE
-        # Senza questo, il drag fallisce dopo il primo movimento
-        if event.mimeData().hasUrls():
-            event.acceptProposedAction()
-        else:
-            event.ignore()
-
+    # Inoltra eventi di drag all'overlay
+    def dragEnterEvent(self, event):
+        self.overlay.dragEnterEvent(event)
+    def dragMoveEvent(self, event):
+        self.overlay.dragMoveEvent(event)
     def dragLeaveEvent(self, event):
-        self.is_dragging = False
-        self.scene.update()
-        super().dragLeaveEvent(event)
-
-    def dropEvent(self, event: QDropEvent):
-        self.is_dragging = False
-        self.is_hovering = False
-        self.scene.update()
-        files = [u.toLocalFile() for u in event.mimeData().urls()]
-        if files: self.file_dropped.emit(files[0])
+        self.overlay.dragLeaveEvent(event)
+    def dropEvent(self, event):
+        self.overlay.dropEvent(event)
 
 
 # --- START SCREEN ---
@@ -576,7 +666,6 @@ class MainWindow(QMainWindow):
         self.player.play()
 
     def on_track_sync_request(self, track_widget):
-        """Called when a track is fully loaded"""
         track_widget.player.setPosition(self.player.position())
         if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
             track_widget.player.play()
