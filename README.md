@@ -1,6 +1,7 @@
 # MixCut - Video Cutter & Audio Mixer
 
-**MixCut** is a modern, dark-themed desktop application built with Python and PyQt6. It allows you to cut video clips with frame precision, mix multiple audio tracks, and normalize volume levels before exporting.
+**MixCut** is a modern, dark-themed desktop application built with Python and PyQt6. It allows you to cut video clips with frame precision, mix multiple audio tracks, and normalize volume levels before exporting.\
+**MixCut** was created to address the need for a simple and immediate way to merge and control audio tracks in video clips, something not possible with applications like LosslessCut.
 
 ![MixCut Screenshot](pictures/mixcut-screenshot.png)
 
@@ -15,7 +16,7 @@
     *   Adjust volume per track (-30dB to +30dB) with real-time preview.
     *   Enable/Disable specific tracks.
     *   **Auto-Normalization:** Applies `dynaudnorm` filter on export for balanced audio.
-*   **⏱️ Professional Timeline:**
+*   **⏱️ Intuitive Timeline:**
     *   Frame-by-frame stepping.
     *   Visual indicators for **Keyframes (I-Frames)** (Yellow marker) vs Current Frame (White marker).
     *   IN/OUT point selection.
