@@ -2,8 +2,7 @@
 
 **MixCut** is a modern, dark-themed desktop application built with Python and PyQt6. It allows you to cut video clips with frame precision, mix multiple audio tracks, and normalize volume levels before exporting.
 
-![MixCut Screenshot]("pictures/mixcut-screenshot.png")
-*(Replace this link with an actual screenshot of your app)*
+![MixCut Screenshot](pictures/mixcut-screenshot.png)
 
 ## ✨ Key Features
 
