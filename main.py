@@ -6,14 +6,15 @@ import tempfile
 import shutil
 import wave
 import struct
-import bisect 
+import bisect
+import ctypes
 
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QLabel, QPushButton, QCheckBox, 
                              QScrollArea, QFileDialog, QMessageBox, QFrame, 
                              QSizePolicy, QSlider, QDoubleSpinBox, QStackedWidget, 
                              QGraphicsView, QGraphicsScene, QStyle, QGridLayout)
-from PyQt6.QtCore import Qt, QUrl, pyqtSignal, QSize, QEvent, QRectF
+from PyQt6.QtCore import Qt, QUrl, pyqtSignal, QSize, QEvent, QRectF, QPointF
 from PyQt6.QtGui import (QPainter, QColor, QPen, QBrush, QAction, QKeySequence, 
                          QDragEnterEvent, QDropEvent, QDragMoveEvent, QIcon, QFont, 
                          QLinearGradient, QPainterPath)
@@ -23,6 +24,24 @@ from PyQt6.QtMultimediaWidgets import QGraphicsVideoItem
 # Import moduli locali
 from utils import FFMPEG_BIN, FFPROBE_BIN, format_time
 from workers import AudioExtractorThread, ExportThread, KeyframeLoaderThread
+
+# --- HELPER PER RISORSE INTERNE (ICONA APP) ---
+
+def resource_path(relative_path):
+
+    """ Ottiene il percorso assoluto delle risorse, funziona per dev e per PyInstaller """
+
+    try:
+
+        # PyInstaller crea una cartella temporanea e salva il path in _MEIPASS
+
+        base_path = sys._MEIPASS
+
+    except Exception:
+
+        base_path = os.path.abspath(".")
+
+    return os.path.join(base_path, relative_path)
 
 # --- HELPER ICONE ---
 def load_custom_icon(name, fallback_text, system_icon=None):
@@ -859,7 +878,16 @@ class MainWindow(QMainWindow):
         e.accept()
 
 if __name__ == '__main__':
+    # 1. Fix per l'icona nella Taskbar di Windows
+    myappid = 'bebo.mixcut.2.0.1' # Una stringa arbitraria unica
+    ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+
     app = QApplication(sys.argv)
+    
+    # 2. Imposta l'icona globale dell'applicazione
+    icon_path = resource_path("app_icon.ico")
+    app.setWindowIcon(QIcon(icon_path))
+
     window = MainWindow()
     window.show()
     sys.exit(app.exec())
